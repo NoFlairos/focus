@@ -10,6 +10,7 @@ import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/install-browser-host.sh"
 EXTENSION_ID = "a" * 32
+STORE_ID = "dmeieacelhalokmjoijllpieglfjojjo"
 
 
 class HostInstallTests(unittest.TestCase):
@@ -21,7 +22,7 @@ class HostInstallTests(unittest.TestCase):
             environment = dict(os.environ, XDG_DATA_HOME=str(data), XDG_CONFIG_HOME=str(config))
 
             def register(extension_id=EXTENSION_ID):
-                return subprocess.run(["bash", str(SCRIPT), extension_id], env=environment,
+                return subprocess.run(["bash", str(SCRIPT)] + ([extension_id] if extension_id else []), env=environment,
                                       capture_output=True, text=True, check=False)
 
             self.assertEqual(register().returncode, 1)
@@ -31,11 +32,16 @@ class HostInstallTests(unittest.TestCase):
             helper.write_text("#!/usr/bin/env python3\n")
             helper.chmod(0o755)
             self.assertEqual(register("invalid-id").returncode, 2)
+            self.assertEqual(register(None).returncode, 0)
+            for browser in ("chromium", "google-chrome"):
+                path = config / browser / "NativeMessagingHosts/io.github.noflairos.focus_ratio.json"
+                self.assertEqual(json.loads(path.read_text())["allowed_origins"], [f"chrome-extension://{STORE_ID}/"])
             result = register()
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(register(None).returncode, 0)
             for browser in ("chromium", "google-chrome"):
                 path = config / browser / "NativeMessagingHosts/io.github.noflairos.focus_ratio.json"
                 manifest = json.loads(path.read_text())
                 self.assertEqual(manifest["path"], str(helper.parent / "native-host.sh"))
-                self.assertEqual(manifest["allowed_origins"], [f"chrome-extension://{EXTENSION_ID}/"])
+                self.assertEqual(manifest["allowed_origins"], sorted([f"chrome-extension://{EXTENSION_ID}/", f"chrome-extension://{STORE_ID}/"]))
                 self.assertTrue(os.access(manifest["path"], os.X_OK))

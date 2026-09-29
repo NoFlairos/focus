@@ -28,7 +28,10 @@ omarchy plugin enable io.github.noflairos.focus-ratio
 omarchy restart shell
 ```
 
-For websites, load `~/.local/share/focus-ratio/browser` in `chrome://extensions`
+The helper installer registers the Chrome Web Store extension for Chromium and
+Google Chrome automatically. Store publication is pending.
+
+For websites during development, load `~/.local/share/focus-ratio/browser` in `chrome://extensions`
 with Developer mode enabled. Copy its ID, then run:
 
 ```sh

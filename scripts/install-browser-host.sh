@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 || ! "$1" =~ ^[a-p]{32}$ ]]; then
-  echo "Usage: $0 CHROMIUM_EXTENSION_ID" >&2
-  echo "Load the unpacked extension first and copy its 32-character ID." >&2
+extension_id="${1:-dmeieacelhalokmjoijllpieglfjojjo}"
+if [[ $# -gt 1 || ! "$extension_id" =~ ^[a-p]{32}$ ]]; then
+  echo "Usage: $0 [CHROMIUM_EXTENSION_ID]" >&2
+  echo "Omit the ID for the Chrome Web Store extension." >&2
   exit 2
 fi
 
-extension_id="$1"
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/focus-ratio"
 if [[ ! -x "$install_dir/focus_ratio_agent.py" ]]; then
@@ -22,14 +22,22 @@ for browser in chromium google-chrome; do
   python3 - "$host_file" "$install_dir/native-host.sh" "$extension_id" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
-pathlib.Path(sys.argv[1]).write_text(json.dumps({
+path = pathlib.Path(sys.argv[1])
+origins = {f"chrome-extension://{sys.argv[3]}/",
+           "chrome-extension://dmeieacelhalokmjoijllpieglfjojjo/"}
+if path.exists():
+    previous = json.loads(path.read_text())
+    origins.update(origin for origin in previous.get("allowed_origins", [])
+                   if isinstance(origin, str) and re.fullmatch(r"chrome-extension://[a-p]{32}/", origin))
+path.write_text(json.dumps({
     "name": "io.github.noflairos.focus_ratio",
     "description": "Local bridge for Focus",
     "path": sys.argv[2],
     "type": "stdio",
-    "allowed_origins": [f"chrome-extension://{sys.argv[3]}/"],
+    "allowed_origins": sorted(origins),
 }, indent=2) + "\n", encoding="utf-8")
 PY
   chmod 0644 "$host_file"

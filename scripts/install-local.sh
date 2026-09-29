@@ -32,6 +32,8 @@ ReadWritePaths="$config_dir" "$state_dir"
 WantedBy=graphical-session.target
 EOF
 
+"$repo_dir/scripts/install-browser-host.sh"
+
 systemctl --user daemon-reload
 systemctl --user reenable focus-ratio.service
 systemctl --user restart focus-ratio.service
