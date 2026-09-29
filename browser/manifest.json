@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Focus \u2014 Site Tracker",
+  "version": "0.4.0",
+  "description": "Track active sites with Focus for Omarchy on Linux. Requires the local Focus helper.",
+  "permissions": [
+    "nativeMessaging",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "site-metadata.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "status.html",
+    "default_title": "Focus",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

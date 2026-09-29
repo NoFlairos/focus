@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Focus</title>
+<style>
+:root { color-scheme: light dark; font: 13px/1.5 system-ui, sans-serif; }
+body { width: 296px; margin: 0; padding: 18px; color: CanvasText; background: Canvas; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { margin: 0; font-size: 15px; font-weight: 600; }
+button { font: inherit; color: inherit; background: transparent; border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
+button:hover { background: color-mix(in srgb, CanvasText 8%, transparent); }
+button:focus-visible, summary:focus-visible { outline: 2px solid CanvasText; outline-offset: 3px; }
+button:disabled { opacity: .5; cursor: default; }
+p { margin: 12px 0; }
+#status { padding: 10px 12px; border-radius: 5px; background: color-mix(in srgb, CanvasText 6%, transparent); }
+details { border-top: 1px solid color-mix(in srgb, CanvasText 14%, transparent); padding-top: 12px; margin-top: 12px; }
+summary { cursor: pointer; font-weight: 500; }
+details p, .hint { font-size: 12px; opacity: .72; }
+code { display: block; font-size: 11px; overflow-wrap: anywhere; user-select: all; }
+</style>
+</head>
+<body>
+<header><h1>Focus</h1><button id="retry" type="button">Refresh</button></header>
+<p id="status" role="status" aria-live="polite">Checking connection…</p>
+<p class="hint">Manage tracking and limits in the Omarchy panel.</p>
+<details id="setup"><summary>Connection setup</summary>
+<p>Install the local Focus helper, then register this extension ID for your browser:</p>
+<code id="extension"></code>
+<p>Run <code>./scripts/install-browser-host.sh EXTENSION_ID</code> from the Focus folder, replacing EXTENSION_ID with the value above.</p>
+</details>
+<details><summary>Local data only</summary>
+<p>Active tab domains, titles and declared site names are sent to the helper on this computer. No remote server receives this data.</p></details>
+<script src="status.js"></script>
+</body>
+</html>

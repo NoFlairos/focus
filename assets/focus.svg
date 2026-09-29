@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Focus</title>
+  <rect x="16" y="16" width="96" height="96" rx="20" fill="#171b20"/>
+  <path d="M48 36H36v12m44-12h12v12M36 80v12h12m44-12v12H80" fill="none" stroke="#eef0ec" stroke-width="6" stroke-linecap="square"/>
+  <circle cx="64" cy="64" r="12" fill="#a8c495"/>
+</svg>
