@@ -1,84 +1,49 @@
-# Chrome Web Store — local draft
+# Chrome Web Store draft
 
-## Listing
+**Name:** Focus — Site Tracker
+**Category:** Productivity · **Language:** English
+**Summary:** Track active sites with Focus for Omarchy on Linux. Requires the local Focus helper.
 
-Name: Focus — Site Tracker
+## Description
 
-Summary: Track active sites with Focus for Omarchy on Linux. Requires the local Focus helper.
+Track active websites in Focus for Omarchy Linux. Classify sites, set hourly
+limits and share a counter with related apps. Manage schedules and pauses in
+the desktop panel; check the helper connection in the extension popup.
 
-Category: Productivity
-Language: English
+Requires the Focus desktop plugin and local helper. Supports Chromium and
+Google Chrome on Linux. Only active tabs matched to visible windows count.
+Choosing Close closes those tabs when their limit is reached.
 
-Description:
+Data stays on your computer. No account, analytics or remote tracking server.
 
-Focus adds website tracking to Focus for Omarchy on Linux.
+## Privacy declarations
 
-See which sites are active in visible browser windows, classify them as Productive,
-Neutral or Consumption, and manage hourly limits in the Focus desktop panel.
-Link an app and a website to share a counter. Pause tracking or set tracking hours.
+**Single purpose:** active-site tracking and limit enforcement for local Focus.
 
-The extension requires Omarchy, the Focus desktop plugin and its local helper.
-It is a companion extension, not a standalone tracker. Install the helper and
-register this extension's ID using the setup instructions in the project README.
-Chromium and Google Chrome on Linux are supported.
+| Access | Reason |
+| --- | --- |
+| tabs | Match active domains, titles and tab/window IDs to visible desktop windows; close eligible tabs at their limit. |
+| nativeMessaging | Exchange site metadata and limit decisions with the local helper. |
+| HTTP/HTTPS content scripts | Read application-name or og:site_name metadata for labels. |
 
-Only active tabs matched to visible browser windows contribute site activity.
-Background tabs do not count. If you choose the Close action, tabs that reach
-an hourly consumption limit are closed while tracking is active.
+Titles and matching data are transient. Domains, declared site names, usage and
+settings may be stored locally. No page body, form fields, passwords or cookies
+are read. No remote code, sale, advertising, credit decisions or third-party
+sharing. Confirm dashboard declarations against its definitions before submission.
 
-Tracking data stays on your computer. No account, analytics or remote tracking
-server is used. The toolbar popup shows the local connection status.
+## Files and links
 
-## Privacy field drafts
-
-Single purpose:
-Provide active-site tracking and hourly site-limit enforcement for the local
-Focus application on Omarchy Linux.
-
-Permission: tabs
-Read active tab domains, titles, IDs and window state to match browser tabs
-with visible desktop windows. Close only matching active tabs whose configured
-hourly limit is reached. Titles are matched in memory, not stored in history.
-
-Permission: nativeMessaging
-Exchange active-site metadata and limit decisions with the user's separately
-installed local Focus helper. No remote server is involved.
-
-Content-script access: HTTP and HTTPS
-Read only application-name or og:site_name metadata for site labels. Scripts do
-not read the page body, form fields, passwords or cookies.
-
-Remote code: No. All executable extension code is included in the ZIP.
-
-Data handling for dashboard review:
-- Browsing activity: active domains, titles, tab/window IDs and window state.
-- Website metadata: declared service names.
-- Domains, site names, classifications and usage totals can be stored by the local helper.
-- Titles and window matching data are transient.
-- No transmission to the developer or third parties; local native messaging only.
-- No sale, advertising, credit decisions or unrelated use of data.
-
-These are factual drafting notes, not preselected dashboard declarations.
-Review the dashboard's definitions before confirming its data-use certifications.
-Do not describe this as "no browsing data is handled".
-
-## Assets and remaining fields
-
-- ZIP: dist/focus-chrome-0.4.0.zip
-- Icon: browser/icons/128.png
-- Small promotional image: release/assets/promo-440x280.png
-- Actual extension screenshots (640×400): release/assets/extension-connected.png and extension-offline.png.
-- Desktop panel/bar crops: available for project documentation; see CAPTURES.md.
-  Their native sizes are not Chrome Store screenshot dimensions.
+- ZIP: `dist/focus-chrome-0.4.0.zip`
+- Icon: `browser/icons/128.png`
+- Promo: `release/assets/promo-440x280.png`
+- Screenshots: `release/assets/extension-connected.png` and `extension-offline.png`
 - Homepage: https://github.com/NoFlairos/focus
 - Support: https://github.com/NoFlairos/focus/issues
 - Privacy: https://noflairos.github.io/focus/privacy.html
-- Developer identity, contact and account declarations: supplied by the publisher.
-- Visibility and countries: confirm before submission.
-- Use deferred publishing so review approval does not automatically publish.
 
-Sources checked 2026-09-29:
-- https://developer.chrome.com/docs/webstore/prepare
-- https://developer.chrome.com/docs/webstore/images
-- https://developer.chrome.com/docs/webstore/cws-dashboard-privacy
-- https://developer.chrome.com/docs/webstore/publish
+Remaining: publisher/contact details, account declarations, countries and visibility.
+Choose deferred publishing. [Reviewer instructions](REVIEWER.md).
+
+References checked 2026-09-29: [images](https://developer.chrome.com/docs/webstore/images),
+[privacy fields](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy),
+[submission](https://developer.chrome.com/docs/webstore/publish).
