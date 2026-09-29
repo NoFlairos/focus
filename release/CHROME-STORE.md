@@ -2,19 +2,30 @@
 
 **Name:** Focus — Site Tracker
 **Category:** Productivity · **Language:** English
-**Summary:** Track active sites with Focus for Omarchy on Linux. Requires the local Focus helper.
+**Summary:** Stay focused and keep distracting sites in check. A local companion for Focus on Omarchy Linux.
 
 ## Description
 
-Track active websites in Focus for Omarchy Linux. Classify sites, set hourly
-limits and share a counter with related apps. Manage schedules and pauses in
-the desktop panel; check the helper connection in the extension popup.
+Stay focused. Make time for what matters.
 
-Requires the Focus desktop plugin and local helper. Supports Chromium and
-Google Chrome on Linux. Only active tabs matched to visible windows count.
-Choosing Close closes those tabs when their limit is reached.
+Focus helps you understand where your screen time goes and keep distractions in
+check. Separate productive work from consumption and set limits that fit your routine.
 
-Data stays on your computer. No account, analytics or remote tracking server.
+• Track your daily screen time.
+• Classify apps and sites as Productive, Neutral or Consumption.
+• Set hourly limits for distracting services.
+• Share one limit across an app and its website.
+• Choose tracking hours, pause when needed, and review your week.
+
+This extension adds website tracking to Focus for Omarchy Linux. It requires the
+Focus desktop plugin and local helper, and supports Chromium and Google Chrome.
+
+Only active tabs matched to visible windows count. Choose a notification, keep
+the site open, or close its active tab when the limit is reached.
+
+Your activity stays on your computer. No account, analytics or remote tracking server.
+
+Get started: https://github.com/NoFlairos/focus#install
 
 ## Privacy declarations
 
@@ -33,7 +44,7 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 
 ## Files and links
 
-- ZIP: `dist/focus-chrome-0.4.0.zip`
+- ZIP: `dist/focus-chrome-0.4.1.zip`
 - Icon: `extensions/chromium/icons/128.png`
 - Promo: `release/assets/promo-440x280.png`
 - Screenshots: `release/assets/extension-connected.png` and `extension-offline.png`

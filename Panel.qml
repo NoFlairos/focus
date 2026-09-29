@@ -1655,7 +1655,7 @@ Panel {
               Text {
                 width: parent.width
                 text: !root.serviceConnected ? "Start the Focus user service or run the local installer."
-                  : !root.diagnostics.browser_connected ? "Track individual sites in Chromium or Chrome."
+                  : !root.diagnostics.browser_connected ? "Keep website distractions in check."
                   : root.paused ? "Tracking and limits are paused."
                   : !root.working ? "Tracking is inactive: check your schedule or session idle state."
                   : Number(root.diagnostics.matched_sites || 0) + " visible site(s) recognized."

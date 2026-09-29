@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Focus \u2014 Site Tracker",
-  "version": "0.4.0",
-  "description": "Track active sites with Focus for Omarchy on Linux. Requires the local Focus helper.",
+  "name": "Focus — Site Tracker",
+  "version": "0.4.1",
+  "description": "Stay focused and keep distracting sites in check. A local companion for Focus on Omarchy Linux.",
   "permissions": [
     "nativeMessaging",
     "tabs"

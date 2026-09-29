@@ -1,11 +1,14 @@
 # Focus
 
-Local screen time and hourly limits for Omarchy. Classify apps and sites as
-Productive, Neutral or Consumption, group related services, and set tracking hours.
+Stay focused. Understand your screen time and set limits on distractions.
+
+Track apps and websites, give distracting services an hourly budget, and review
+your week. Built for Omarchy Linux. Your activity stays on your computer.
+
+![Now](release/assets/panel-now.png)
 
 ![Focus in the bar](release/assets/bar-focus.png)
 
-![Now](release/assets/panel-now.png)
 ![Manage](release/assets/panel-manage.png)
 
 ## Install

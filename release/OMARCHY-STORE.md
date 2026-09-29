@@ -1,13 +1,13 @@
 # Omarchy submission draft
 
-**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.4.0
+**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.4.1
 
 Repository: https://github.com/NoFlairos/focus
 Tags: bar, hyprland, quickshell
 Commit: resolve the current main HEAD at submission.
 
-Local screen time and hourly limits for visible apps and websites, with schedules,
-shared counters and a seven-day history view.
+Stay focused and keep distractions in check. Understand your screen time, set
+hourly limits for apps and websites, and review your week. All tracking stays local.
 
 **Setup required:** install the Python helper and systemd user service before
 using the widget. Website tracking also requires the extension and native-host

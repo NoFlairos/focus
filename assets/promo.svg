@@ -1,7 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280">
+  <title>Focus — Make time for what matters.</title>
   <rect width="440" height="280" fill="#171b20"/>
-  <g transform="translate(156 76)">
+  <g transform="translate(156 24)">
     <path d="M48 36H36v12m44-12h12v12M36 80v12h12m44-12v12H80" fill="none" stroke="#eef0ec" stroke-width="6" stroke-linecap="square"/>
     <circle cx="64" cy="64" r="12" fill="#a8c495"/>
   </g>
+  <text x="220" y="178" text-anchor="middle" fill="#eef0ec" font-family="sans-serif" font-size="34" font-weight="600">Focus</text>
+  <text x="220" y="213" text-anchor="middle" fill="#bbc2c0" font-family="sans-serif" font-size="17">Make time for what matters.</text>
 </svg>

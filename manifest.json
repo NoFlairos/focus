@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.noflairos.focus-ratio",
   "name": "Focus",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": "noflairos",
   "license": "MIT",
-  "description": "Track visible work distractions and hourly consumption budgets.",
+  "description": "Stay focused. Understand your screen time and set limits on distractions, locally on Omarchy.",
   "kinds": [
     "bar-widget"
   ],
