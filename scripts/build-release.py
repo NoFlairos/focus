@@ -39,7 +39,7 @@ def main():
     browser = ["browser/" + name for name in (
         "manifest.json", "background.js", "site-metadata.js", "status.html", "status.js",
         "icons/16.png", "icons/32.png", "icons/48.png", "icons/128.png")]
-    source = ["manifest.json", "Panel.qml", "BarWidget.qml", "README.md", "PRIVACY.md", "LICENSE", ".gitignore",
+    source = ["manifest.json", "Panel.qml", "BarWidget.qml", "README.md", "PRIVACY.md", "LICENSE", ".gitignore", "preview.png",
               "agent/focus_ratio_agent.py"] + browser
     for pattern in ("scripts/*.sh", "scripts/*.py", "tests/*.py", "tests/*.js", "tests/*.mjs", "tests/*.sh", "assets/*.svg",
                     "release/*.md", "release/assets/*.png", "site/*.html"):
