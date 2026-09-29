@@ -9,8 +9,8 @@ state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/focus-ratio"
 
 mkdir -p "$install_dir" "$install_dir/browser" "$install_dir/browser/icons" "$unit_dir" "$config_dir" "$state_dir"
 install -m 0755 "$repo_dir/agent/focus_ratio_agent.py" "$install_dir/focus_ratio_agent.py"
-install -m 0644 "$repo_dir"/browser/*.json "$repo_dir"/browser/*.js "$repo_dir"/browser/*.html "$install_dir/browser/"
-install -m 0644 "$repo_dir"/browser/icons/*.png "$install_dir/browser/icons/"
+install -m 0644 "$repo_dir"/extensions/chromium/*.json "$repo_dir"/extensions/chromium/*.js "$repo_dir"/extensions/chromium/*.html "$install_dir/browser/"
+install -m 0644 "$repo_dir"/extensions/chromium/icons/*.png "$install_dir/browser/icons/"
 cat > "$unit_dir/focus-ratio.service" <<EOF
 [Unit]
 Description=Focus local application and site tracker

@@ -7,7 +7,7 @@ cd "$repo_dir"
 for script in scripts/*.sh tests/*.sh; do
   bash -n "$script"
 done
-for script in browser/*.js tests/*.js tests/*.mjs; do
+for script in extensions/chromium/*.js tests/*.js tests/*.mjs; do
   node --check "$script"
 done
 python3 - <<'PY'
@@ -18,7 +18,8 @@ from pathlib import Path
 for directory in ("agent", "tests", "scripts"):
     for path in Path(directory).glob("*.py"):
         ast.parse(path.read_text(), filename=str(path))
-for path in (Path("manifest.json"), Path("browser/manifest.json")):
+assert list(Path(".").glob("*/manifest.json")) == [], "Only the root manifest may be at marketplace discovery depth"
+for path in (Path("manifest.json"), Path("extensions/chromium/manifest.json")):
     json.loads(path.read_text())
 PY
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q

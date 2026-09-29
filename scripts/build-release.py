@@ -31,12 +31,12 @@ def build(name, files):
 
 def main():
     plugin = json.loads((ROOT / "manifest.json").read_text())
-    extension = json.loads((ROOT / "browser/manifest.json").read_text())
+    extension = json.loads((ROOT / "extensions/chromium/manifest.json").read_text())
     for size, filename in extension["icons"].items():
-        data = (ROOT / "browser" / filename).read_bytes()
+        data = (ROOT / "extensions/chromium" / filename).read_bytes()
         if data[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", data[16:24]) != (int(size), int(size)):
             raise ValueError(f"Invalid icon: {filename}")
-    browser = ["browser/" + name for name in (
+    browser = ["extensions/chromium/" + name for name in (
         "manifest.json", "background.js", "site-metadata.js", "status.html", "status.js",
         "icons/16.png", "icons/32.png", "icons/48.png", "icons/128.png")]
     source = ["manifest.json", "Panel.qml", "BarWidget.qml", "README.md", "PRIVACY.md", "LICENSE", ".gitignore", "preview.png",
@@ -46,12 +46,12 @@ def main():
         source.extend(str(path.relative_to(ROOT)) for path in ROOT.glob(pattern))
     DIST.mkdir(exist_ok=True)
     source_zip = build(f"focus-source-{plugin['version']}.zip", source)
-    # Chrome requires manifest.json at the archive root, without a browser/ prefix.
+    # Chrome requires manifest.json at the archive root, without a extensions/chromium/ prefix.
     extension_zip = DIST / f"focus-chrome-{extension['version']}.zip"
     with zipfile.ZipFile(source_zip) as archive, zipfile.ZipFile(extension_zip, "w") as output:
         for name in sorted(browser + ["LICENSE"]):
             info = archive.getinfo(name)
-            info.filename = name.removeprefix("browser/")
+            info.filename = name.removeprefix("extensions/chromium/")
             output.writestr(info, archive.read(name))
     with zipfile.ZipFile(extension_zip) as archive:
         assert archive.testzip() is None

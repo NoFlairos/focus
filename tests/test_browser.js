@@ -18,7 +18,7 @@ const chrome = {
     query: async () => tabs, remove: id => removed.push(id)},
   windows: {getAll: async () => [], onCreated: event(), onRemoved: event(), onFocusChanged: event()}
 };
-vm.runInNewContext(fs.readFileSync('browser/background.js', 'utf8'), {
+vm.runInNewContext(fs.readFileSync('extensions/chromium/background.js', 'utf8'), {
   chrome, crypto: {randomUUID: () => 'test-browser'}, URL, console,
   setInterval() {}, setTimeout() {}, clearTimeout() {}
 });

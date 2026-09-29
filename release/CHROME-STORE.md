@@ -34,7 +34,7 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 ## Files and links
 
 - ZIP: `dist/focus-chrome-0.4.0.zip`
-- Icon: `browser/icons/128.png`
+- Icon: `extensions/chromium/icons/128.png`
 - Promo: `release/assets/promo-440x280.png`
 - Screenshots: `release/assets/extension-connected.png` and `extension-offline.png`
 - Homepage: https://github.com/NoFlairos/focus

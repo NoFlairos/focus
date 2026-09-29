@@ -1655,13 +1655,25 @@ Panel {
               Text {
                 width: parent.width
                 text: !root.serviceConnected ? "Start the Focus user service or run the local installer."
-                  : !root.diagnostics.browser_connected ? "Enable the browser extension and open its popup to check the local connection."
+                  : !root.diagnostics.browser_connected ? "Track individual sites in Chromium or Chrome."
                   : root.paused ? "Tracking and limits are paused."
                   : !root.working ? "Tracking is inactive: check your schedule or session idle state."
                   : Number(root.diagnostics.matched_sites || 0) + " visible site(s) recognized."
                 color: root.mutedText
                 font.pixelSize: Style.font.caption
                 wrapMode: Text.WordWrap
+              }
+              Omarchy.Button {
+                visible: !root.diagnostics.browser_connected
+                text: "Set up extension"
+                foreground: root.textColor
+                bordered: true
+                focusable: true
+                fontSize: Style.font.bodySmall
+                onClicked: {
+                  Quickshell.execDetached(["xdg-open", "https://github.com/NoFlairos/focus#install"])
+                  root.close()
+                }
               }
               Omarchy.Button {
                 visible: !root.serviceConnected
