@@ -5,7 +5,9 @@ Plugin ID: io.github.noflairos.focus-ratio
 Version: 0.4.0
 Category: Productivity
 Suggested tags: productivity, screen-time, local, tracking
-Repository and exact commit: pending GitHub preparation and publication approval.
+Repository: https://github.com/NoFlairos/focus
+Release: https://github.com/NoFlairos/focus/releases/tag/v0.4.0
+Exact commit: resolve the current main HEAD when preparing the catalog submission.
 
 Description:
 Local screen-time tracking and hourly limits for visible apps and websites.

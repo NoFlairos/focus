@@ -4,7 +4,7 @@ Platform: Omarchy Linux with Hyprland, Quickshell, Python 3, systemd user servic
 and Chromium or Google Chrome. No product login or paid subscription is needed.
 The extension cannot be tested as a standalone tracker on another OS.
 
-1. Obtain the public repository/release (URL to be supplied before submission).
+1. Obtain https://github.com/NoFlairos/focus/releases/tag/v0.4.0.
 2. Run ./scripts/install-local.sh, then follow README.md to install the Omarchy widget.
 3. Load browser/ unpacked, or install the review build supplied by the store.
 4. Copy the actual extension ID from its popup or chrome://extensions.

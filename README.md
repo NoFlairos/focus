@@ -64,7 +64,14 @@ a pause control and a seven-day history view.
 - The helper runs as a user service, without root privileges. Data is local in
   `~/.config/focus-ratio/` and `~/.local/state/focus-ratio/`.
 
-## Local setup
+## Installation
+
+Clone the source or extract the source archive from the [release](https://github.com/NoFlairos/focus/releases/tag/v0.4.0):
+
+```sh
+git clone https://github.com/NoFlairos/focus.git
+cd focus
+```
 
 1. Install the local helper and user service:
 
@@ -204,3 +211,5 @@ Public name: **Focus**. The existing `focus-ratio` identifiers and storage paths
 are retained for compatibility. See [release/README.md](release/README.md) for
 local packaging and the store submission drafts. Build archives with
 `python3 scripts/build-release.py`; this does not publish or install anything.
+
+Public privacy policy: https://noflairos.github.io/focus/privacy.html

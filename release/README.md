@@ -1,13 +1,17 @@
-# Focus 0.4.0 — local release preparation
+# Focus 0.4.0 — publication files
 
-This folder is a publication draft. Nothing has been uploaded or submitted.
+Repository: https://github.com/NoFlairos/focus
+Release: https://github.com/NoFlairos/focus/releases/tag/v0.4.0
+Privacy: https://noflairos.github.io/focus/privacy.html
+
+Store listings remain drafts until their separate submissions are approved.
 
 - CHROME-STORE.md: listing, permission explanations and outstanding account fields.
 - OMARCHY-STORE.md: catalog submission and mandatory helper disclosure.
 - REVIEWER.md: installation and behavior verification instructions.
 - assets/: store promotional image, extension screenshots and user-supplied panel/bar crops.
 - VALIDATION.md: passed isolated checks and remaining full-session verification.
-- ../site/privacy.html: standalone privacy page, ready for later hosting.
+- ../site/privacy.html: privacy page published on the gh-pages branch.
 - ../assets/: editable original SVG artwork; MIT licensed with the project.
 
 Build and verify:
@@ -29,7 +33,7 @@ Before submission:
 - Complete the separately approved clean-install test.
 - Extension screenshots and approved panel/bar crops are prepared (see CAPTURES.md).
 - Confirm final artwork and listing copy.
-- Supply the public source, support and hosted privacy URLs.
+- Verify the public source, support and privacy URLs when submitting.
 - Confirm publisher account declarations and distribution choices.
 - Register the store-assigned extension ID when testing the store build.
 

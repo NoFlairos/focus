@@ -70,7 +70,9 @@ Do not describe this as "no browsing data is handled".
 - Actual extension screenshots (640×400): release/assets/extension-connected.png and extension-offline.png.
 - Desktop panel/bar crops: available for project documentation; see CAPTURES.md.
   Their native sizes are not Chrome Store screenshot dimensions.
-- Homepage, support and privacy URLs: pending public repository/hosting approval.
+- Homepage: https://github.com/NoFlairos/focus
+- Support: https://github.com/NoFlairos/focus/issues
+- Privacy: https://noflairos.github.io/focus/privacy.html
 - Developer identity, contact and account declarations: supplied by the publisher.
 - Visibility and countries: confirm before submission.
 - Use deferred publishing so review approval does not automatically publish.
