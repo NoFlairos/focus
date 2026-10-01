@@ -1002,6 +1002,8 @@ Panel {
                   spacing: Style.space(5)
                   Text {
                     width: parent.width
+                    objectName: "suggestionLabel"
+                    textFormat: Text.PlainText
                     text: modelData.name + " · possible group"
                     color: root.textColor
                     font.pixelSize: Style.font.bodySmall
@@ -1601,6 +1603,7 @@ Panel {
                     Text {
                       width: parent.width - restoreButton.width - parent.spacing
                       height: parent.height
+                      textFormat: Text.PlainText
                       text: root.displayName({ id: modelData, name: modelData.split(":").slice(1).join(":") })
                       color: root.textColor
                       font.pixelSize: Style.font.bodySmall
@@ -1719,6 +1722,7 @@ Panel {
               Text {
                 visible: text.length > 0
                 width: parent.width
+                textFormat: Text.PlainText
                 text: root.dataFeedback
                 color: root.mutedText
                 font.pixelSize: Style.font.caption

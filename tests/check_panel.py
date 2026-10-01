@@ -1,6 +1,15 @@
 # Instantiate the real panel with lightweight shell fixtures; requires QtTest.
 from pathlib import Path
-import shutil, tempfile, subprocess, os
+import shutil, tempfile, subprocess, os, threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+requests = []
+class ImageProbe(BaseHTTPRequestHandler):
+ def do_GET(self):
+  requests.append(self.path)
+  self.send_response(204); self.end_headers()
+ def log_message(self, *args): pass
+server = ThreadingHTTPServer(("127.0.0.1", 0), ImageProbe)
+threading.Thread(target=server.serve_forever, daemon=True).start()
 temporary = tempfile.TemporaryDirectory(prefix='focus-panel-test-')
 root=Path(temporary.name)
 modules=root/'modules'
@@ -11,13 +20,19 @@ def module(name, files):
   lines.append(('singleton ' if singleton else '')+typ+' 1.0 '+typ+'.qml')
   (d/(typ+'.qml')).write_text(('pragma Singleton\n' if singleton else '')+body)
  (d/'qmldir').write_text('\n'.join(lines))
-module('Quickshell',{'Quickshell':(True,'import QtQuick\nQtObject { function execDetached(args) {} }')})
+module('Quickshell',{'Quickshell':(True,'import QtQuick\nQtObject { function execDetached(args) {} function env(name) {return "";} }')})
+module('Quickshell.Io',{'FileView':(False,'''import QtQuick
+QtObject {property string path; property bool watchChanges; property bool printErrors; signal loaded(); signal fileChanged(); function reload() {} function text() {return "{}";} }''')})
 module('qs.Commons',{
 'Style':(True,'''import QtQuick
-QtObject { property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} }'''),
+QtObject { property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
 'Color':(True,'''import QtQuick
 QtObject { property var popups: ({text: Qt.rgba(0.9,0.9,0.9,1), background: Qt.rgba(0.12,0.12,0.12,1)}) }''')})
 module('qs.Ui',{
+'BarWidget':(False,'''import QtQuick
+Item {property string moduleName; property var bar: null;}'''),
+'WidgetButton':(False,'''import QtQuick
+Item {property var bar; property string text; property bool labelVisible; property bool hasVisualContent; property real fontSize; property real fixedWidth; property color foreground: "white"; property string fontFamily: "Sans"; property string tooltipText; signal pressed(int buttonCode); width:fixedWidth; height:30; implicitWidth:fixedWidth; implicitHeight:30;}'''),
 'TextField':(False,'''import QtQuick
 import QtQuick.Controls as Controls
 Controls.TextField { property color foreground; }'''),
@@ -32,6 +47,8 @@ Item { property var anchorItem; property var owner; property var bar; property b
 'PanelKeyCatcher':(False,'''import QtQuick
 Item { signal closeRequested(); signal tabRequested(int direction); }''')})
 shutil.copyfile('Panel.qml',root/'FocusPanel.qml')
+shutil.copyfile('Panel.qml',root/'Panel.qml')
+shutil.copyfile('BarWidget.qml',root/'FocusBar.qml')
 (root/'tst_panel.qml').write_text('''import QtQuick
 import QtTest
 Item {
@@ -47,7 +64,27 @@ Item {
  function appLabel(row) {return row.name;}
  }
  FocusPanel {id: focusPanel; anchors.fill:parent; widget:widget; page:"manage"}
+ FocusBar {id: focusBar; width:340; height:30}
  TestCase {
+ function test_untrusted_labels_stay_literal() {
+ var markup = '<img src="http://127.0.0.1:PROBE_PORT/label.png"><b>Untrusted site</b>'
+ focusBar.snapshot = {working:true, tracked:[{id:"site:untrusted.example",name:markup,visible_windows:1,category:"neutral"}]}
+ focusPanel.page="manage"; focusPanel.manageSection="groups"
+ widget.snapshot = Object.assign({}, widget.snapshot, {suggestions:[{source:"site:one.example",destination:"app:two",name:markup}]})
+ wait(200)
+ var barLabel = findChild(focusBar, "barTargetLabel")
+ verify(barLabel !== null)
+ compare(barLabel.text, markup)
+ compare(barLabel.textFormat, Text.PlainText)
+ var suggestion = findChild(focusPanel, "suggestionLabel")
+ verify(suggestion !== null)
+ compare(suggestion.text, markup + " · possible group")
+ compare(suggestion.textFormat, Text.PlainText)
+ wait(300)
+ focusBar.snapshot = {tracked:[]}
+ widget.snapshot = Object.assign({}, widget.snapshot, {suggestions:[]})
+ focusPanel.manageSection=""
+ }
  name: "ManagePanel"; when:windowShown
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
@@ -101,9 +138,13 @@ Item {
  }
  }
 }
-''')
+'''.replace('PROBE_PORT', str(server.server_port)))
 
 environment = dict(os.environ, QT_QPA_PLATFORM="offscreen", QT_QPA_PLATFORMTHEME="", QT_QUICK_CONTROLS_STYLE="Basic")
 result = subprocess.run(["/usr/lib/qt6/bin/qmltestrunner", "-import", str(modules), "-input", str(root)], env=environment)
+server.shutdown()
+server.server_close()
 temporary.cleanup()
+if requests:
+ raise AssertionError(f"Untrusted labels triggered network requests: {requests}")
 raise SystemExit(result.returncode)

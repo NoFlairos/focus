@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.noflairos.focus-ratio",
   "name": "Focus",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": "noflairos",
   "license": "MIT",
   "description": "Stay focused. Understand your screen time and set limits on distractions, locally on Omarchy.",

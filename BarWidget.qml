@@ -166,6 +166,8 @@ BarWidget {
               Text {
                 width: Math.min(implicitWidth, Style.space(76))
                 anchors.verticalCenter: parent.verticalCenter
+                objectName: "barTargetLabel"
+                textFormat: Text.PlainText
                 text: root.appLabel(modelData)
                 color: button.foreground
                 font.family: button.fontFamily
