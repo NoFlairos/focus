@@ -13,7 +13,7 @@ your week. Built for Omarchy Linux. Your activity stays on your computer.
 
 ## Install
 
-Requires Omarchy Linux, Python 3 and a systemd user session. The helper is required;
+Requires Omarchy Linux, Python 3, libpsl and a systemd user session. The helper is required;
 installing the widget alone does not start tracking.
 
 ```sh
@@ -59,8 +59,22 @@ ambiguous browser titles are skipped.
 
 Groups share settings and one counter. Merging adds existing history, which cannot
 be split afterward. Detach starts an independent counter with the same settings.
-Explicit web-app domains can link automatically; matching names only suggest a group.
-Excluding an unclassified entry deletes its pending history.
+Explicit web-app domains link automatically. Domains has three modes:
+
+- **Smart:** automatically group sites with the same declared application or manifest.
+- **Group:** automatically join all sites in the displayed domain family.
+- **Separate:** keep new sites independent; existing groups remain linked.
+
+Domain families use system libpsl ICANN data, so Group can also join hosted
+projects such as `*.pages.dev`. Detached, excluded and dismissed entries stay
+independent. Other matching services remain suggestions.
+
+Classified entries can be excluded without losing their settings or history.
+Excluding an unclassified entry deletes its pending history. Track again restores
+the entry immediately, joining its group or returning it to Review.
+Excluded entries are hidden by default. Show / Hide remembers your choice;
+individual Hide and Show hidden control entries separately.
+Use **↑ / ↓** to jump through long lists.
 
 ## Data and removal
 

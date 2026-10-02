@@ -16,6 +16,16 @@ BarWidget {
   readonly property string agentPath: dataHome + "/focus-ratio/focus_ratio_agent.py"
   readonly property string statePath: stateHome + "/focus-ratio/state.json"
   property var snapshot: ({ tracked: [], today: ({}), history: [] })
+  property double statusNow: Date.now()
+  readonly property bool serviceConnected: {
+    var updated = Date.parse(String(snapshot.updated_at || ""))
+    return isFinite(updated) && Math.abs(statusNow - updated) < 5000
+  }
+  readonly property string connectionIssue: !serviceConnected ? "Service offline"
+    : snapshot.diagnostics && snapshot.diagnostics.browser_running === true
+      && snapshot.diagnostics.browser_can_close_tabs === false ? "Reload extension"
+    : snapshot.diagnostics && snapshot.diagnostics.browser_connection_expected === true
+      && snapshot.diagnostics.browser_connected === false ? "Browser offline" : ""
   readonly property bool trackingPaused: snapshot.paused === true || snapshot.working === false
   readonly property var visibleTargets: (snapshot.tracked || []).filter(function(target) {
     return Number(target.visible_windows || 0) > 0
@@ -45,6 +55,13 @@ BarWidget {
     } catch (error) {
       // Keep the last good state during a transient file reload.
     }
+  }
+
+  function showDiagnostics() {
+    if (!panelItem) return
+    panelItem.page = "manage"
+    panelItem.manageSection = "diagnostics"
+    root.open()
   }
 
   function appLabel(target) {
@@ -88,7 +105,10 @@ BarWidget {
     interval: 2000
     running: true
     repeat: true
-    onTriggered: stateFile.reload()
+    onTriggered: {
+      root.statusNow = Date.now()
+      stateFile.reload()
+    }
   }
 
   Loader {
@@ -111,23 +131,58 @@ BarWidget {
     hasVisualContent: true
     fontSize: Style.font.bodySmall
     fixedWidth: Math.max(Style.space(42),
-      Math.min(Style.space(340), chips.implicitWidth + Style.spaceReal(14)))
+      Math.min(Style.space(340), chips.implicitWidth + Style.spaceReal(14)
+        + (connectionIndicator.visible ? connectionIndicator.width + Style.space(5) : 0)))
     Behavior on fixedWidth {
       NumberAnimation { duration: 180; easing.type: Easing.InOutQuad }
     }
-    tooltipText: root.trackingPaused ? "Focus · tracking paused"
+    tooltipText: root.connectionIssue ? "Focus · " + root.connectionIssue
+      + (root.connectionIssue === "Browser offline" ? "\nWebsite tracking and tab limits unavailable."
+        : root.connectionIssue === "Reload extension" ? "\nTab closing unavailable. Reload Focus in chrome://extensions."
+        : "\nTracking and limits unavailable.")
+      : root.trackingPaused ? "Focus · tracking paused"
       + (root.snapshot.idle && !root.snapshot.paused ? " while idle" : "")
       : root.visibleTargets.length ? root.visibleTargets.map(function(target) {
       return root.appLabel(target) + (target.category === "consumption"
         ? " · " + root.remainingLabel(target.remaining_seconds) + " left" : "")
     }).join("\n") : "Focus · no visible tracked app"
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.LeftButton) root.toggle()
+      if (buttonCode !== Qt.LeftButton) return
+      if (root.connectionIssue && !root.opened) root.showDiagnostics()
+      else root.toggle()
+    }
+
+    Rectangle {
+      id: connectionIndicator
+      objectName: "connectionIndicator"
+      visible: root.connectionIssue !== ""
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spaceReal(7)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Style.space(16)
+      height: width
+      radius: width / 2
+      color: "transparent"
+      border.width: Style.spacing.hairline
+      border.color: button.activeColor
+
+      Text {
+        anchors.centerIn: parent
+        text: "!"
+        color: button.activeColor
+        font.family: button.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+      }
     }
 
     Flickable {
-      anchors.centerIn: parent
-      width: Math.min(chips.implicitWidth, button.width - Style.spaceReal(14))
+      anchors.left: parent.left
+      anchors.leftMargin: Style.spaceReal(7)
+        + (connectionIndicator.visible ? connectionIndicator.width + Style.space(5) : 0)
+      anchors.verticalCenter: parent.verticalCenter
+      width: Math.min(chips.implicitWidth, button.width - Style.spaceReal(14)
+        - (connectionIndicator.visible ? connectionIndicator.width + Style.space(5) : 0))
       height: button.height
       contentWidth: chips.implicitWidth
       contentHeight: height

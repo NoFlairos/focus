@@ -1,6 +1,6 @@
 # Omarchy submission draft
 
-**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.4.1
+**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.5.0
 
 Repository: https://github.com/NoFlairos/focus
 Tags: bar, hyprland, quickshell

@@ -1,10 +1,10 @@
 # Publication
 
 [Source](https://github.com/NoFlairos/focus) ·
-[0.4.0 release](https://github.com/NoFlairos/focus/releases/tag/v0.4.0) ·
+[Last published release: 0.4.0](https://github.com/NoFlairos/focus/releases/tag/v0.4.0) ·
 [Privacy](https://noflairos.github.io/focus/privacy.html)
 
-Store submissions require separate approval.
+Current source and extension: **0.5.0**. Store submissions require separate approval.
 
 | File | Purpose |
 | --- | --- |

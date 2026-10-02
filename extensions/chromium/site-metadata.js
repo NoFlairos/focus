@@ -1,15 +1,33 @@
 // Read service identity only; document titles can contain private page details.
-function reportSiteName() {
-  const metadata = document.querySelector('meta[name="application-name"]')
+function reportSiteIdentity() {
+  const application = document.querySelector('meta[name="application-name"]');
+  const applicationName = (application?.content || "").replace(/\s+/g, " ").trim().slice(0, 120);
+  const metadata = application
     || document.querySelector('meta[property="og:site_name"]');
   const name = (metadata?.content || "").replace(/\s+/g, " ").trim().slice(0, 120);
-  chrome.runtime.sendMessage({type: "site_metadata", domain: location.hostname, name})
+  let manifest = "";
+  const link = document.querySelector('link[rel~="manifest"]');
+  try {
+    const url = new URL(link?.href || "", location.href);
+    if (link && ["http:", "https:"].includes(url.protocol)
+        && !url.username && !url.password
+        && (url.hostname === location.hostname || location.hostname.endsWith("." + url.hostname))) {
+      url.search = "";
+      url.hash = "";
+      manifest = url.href;
+    }
+  } catch (_) {}
+  const identity = {
+    application_name: applicationName,
+    manifest,
+  };
+  chrome.runtime.sendMessage({type: "site_metadata", domain: location.hostname, name, identity})
     .catch(() => {});
 }
-reportSiteName();
+reportSiteIdentity();
 let metadataTimer;
 if (document.head) new MutationObserver(() => {
   clearTimeout(metadataTimer);
-  metadataTimer = setTimeout(reportSiteName, 300);
+  metadataTimer = setTimeout(reportSiteIdentity, 300);
 }).observe(document.head, {subtree: true, childList: true, attributes: true,
-  attributeFilter: ["content", "name", "property"]});
+  attributeFilter: ["content", "name", "property", "href", "rel"]});

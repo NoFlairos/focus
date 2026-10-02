@@ -3,8 +3,8 @@
 Requires Omarchy Linux with Hyprland, Quickshell, Python 3, systemd user services
 and Chromium or Google Chrome. No product account is needed.
 
-1. Download [Focus 0.4.0](https://github.com/NoFlairos/focus/releases/tag/v0.4.0)
-   and follow the [installation instructions](../README.md#install).
+1. Follow the [installation instructions](../README.md#install) from the
+   current repository. Website tracking requires the matching extension build.
 2. Register the ID of the extension actually installed. The store ID may differ
    from an unpacked build. Restart the browser; check the popup says Connected.
 3. In Manage, enable today and All day, then Save. Open a test site in a visible

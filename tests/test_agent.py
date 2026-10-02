@@ -38,7 +38,8 @@ class AgentTests(unittest.TestCase):
         self.focus = mock.patch.object(agent, "focused_window_address", lambda: "0x123")
         self.session = mock.patch.object(agent, "session_status", lambda: (False, False))
         self.schedule = mock.patch.object(agent, "in_work_hours", lambda now, schedule: True)
-        for patcher in (self.visible, self.focus, self.session, self.schedule):
+        self.hypr = mock.patch.object(agent, "hypr_json", return_value=[])
+        for patcher in (self.visible, self.focus, self.session, self.schedule, self.hypr):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.runtime = agent.Runtime()
@@ -143,6 +144,17 @@ class AgentTests(unittest.TestCase):
         clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": address}
                    for address in ("0x1", "0x2")]
         self.assertEqual(self.runtime.visible_sites(clients, [{"title": "Inbox", "domain": "example.org"}]), [])
+
+    def test_diagnostics_detect_legacy_extension_without_tab_ids(self):
+        self.clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": "0x123"}]
+        window = {"id": 1, "title": "Inbox", "domain": "example.org"}
+        for windows, expected in (([window], False), ([{**window, "tab_id": 10}], True), ([], None)):
+            with self.subTest(expected=expected):
+                self.runtime.handle_message({"op": "browser_snapshot", "windows": windows})
+                self.runtime.tick(0)
+                diagnostics = self.runtime.latest_state["diagnostics"]
+                self.assertTrue(diagnostics["browser_connected"])
+                self.assertIs(diagnostics["browser_can_close_tabs"], expected)
 
     def test_merged_sites_share_blocking_and_browser_sessions_coexist(self):
         for target in ("site:first.example", "site:second.example"):
@@ -271,6 +283,343 @@ class AgentTests(unittest.TestCase):
         self.assertIn("app:test", self.runtime.config["targets"])
         self.assertTrue(exported.exists())
 
+    def test_subdomain_suggestion_keeps_parent_settings_and_requires_confirmation(self):
+        parent, child = "site:example.co.uk", "site:app.example.co.uk"
+        for target, category in ((parent, "neutral"), (child, "productive")):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": category})
+        self.runtime.tick(0)
+        suggestions = self.runtime.latest_state["suggestions"]
+        self.assertEqual(len(suggestions), 1)
+        suggestion = suggestions[0]
+        self.assertEqual(suggestion["source"], child)
+        self.assertEqual(suggestion["destination"], parent)
+        self.assertEqual(suggestion["reason"], "Subdomain")
+        self.assertEqual(suggestion["source_domain"], "app.example.co.uk")
+        self.assertIn(child, self.runtime.config["targets"])
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.runtime.handle_message({"op": "dismiss_suggestion", **suggestion})
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["suggestions"], [])
+
+    def test_subdomain_suggestions_use_group_members_and_prioritize_same_category(self):
+        rows = [
+            {"id": "app:service", "name": "Service", "category": "neutral", "configured": True, "members": ["site:example.org"]},
+            {"id": "site:app.example.org", "name": "Workspace", "category": "neutral", "configured": True},
+            {"id": "site:video.example.org", "name": "Videos", "category": "consumption", "configured": True},
+            {"id": "site:notexample.org", "name": "Unrelated", "category": "neutral", "configured": True},
+            {"id": "site:example.org.unrelated.org", "name": "Other", "category": "neutral", "configured": True},
+        ]
+        suggestions = self.runtime.group_suggestions(rows)
+        self.assertEqual([s["source"] for s in suggestions], ["site:app.example.org", "site:video.example.org"])
+        self.assertTrue(all(s["destination"] == "app:service" for s in suggestions))
+        self.assertTrue(all(s["destination_domain"] == "example.org" for s in suggestions))
+
+    def test_subdomain_suggestions_do_not_depend_on_short_site_names(self):
+        rows = [{"id": target, "name": "X", "configured": True, "category": "neutral"}
+                for target in ("site:console.example.org", "site:example.org")]
+        self.assertEqual(self.runtime.group_suggestions(rows)[0]["reason"], "Subdomain")
+
+    def test_smart_subdomains_require_application_identity_not_brand_name(self):
+        parent = "site:example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        self.runtime.config["site_names"].update({"example.org": "Brand", "app.example.org": "Brand"})
+        self.runtime.link_sites({"app.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:app.example.org"), "site:app.example.org")
+        self.runtime.config["site_identity"] = {
+            "example.org": {"application_name": "Workspace"},
+            "app.example.org": {"application_name": "Workspace"},
+            "mail.example.org": {"application_name": "Mail"},
+        }
+        self.runtime.link_sites({"app.example.org", "mail.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:app.example.org"), parent)
+        self.assertEqual(self.runtime.resolve_target_id("site:mail.example.org"), "site:mail.example.org")
+
+    def test_smart_subdomains_can_share_a_declared_manifest(self):
+        parent = "site:example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        identity = {"manifest": "https://example.org/app.webmanifest"}
+        self.runtime.config["site_identity"] = {"example.org": identity, "app.example.org": identity}
+        self.runtime.link_sites({"app.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:app.example.org"), parent)
+
+    def test_explicit_group_merges_saved_usage_and_preserves_exceptions(self):
+        parent, saved = "site:example.org", "site:mail.example.org"
+        for target, category in ((parent, "productive"), (saved, "consumption")):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": category})
+        now = dt.datetime.now().astimezone()
+        bucket, day = agent.current_hour_bucket(now), now.date().isoformat()
+        self.runtime.store.add_times({parent: "productive", saved: "consumption", "site:old.example.org": "unclassified"}, 30, bucket, day)
+        before = self.runtime.store.history()
+        self.runtime.config["independent_targets"] = ["site:detached.example.org"]
+        self.runtime.config["ignored_targets"] = ["site:excluded.example.org"]
+        self.runtime.config["dismissed_suggestions"] = ["site:dismissed.example.org|site:example.org"]
+        self.assertTrue(self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "group"})["ok"])
+        self.runtime.link_sites({"new.example.org", "detached.example.org", "excluded.example.org", "dismissed.example.org"})
+        for domain in ("new", "mail", "old"):
+            self.assertEqual(self.runtime.resolve_target_id("site:" + domain + ".example.org"), parent)
+        for domain in ("detached", "excluded", "dismissed"):
+            site = "site:" + domain + ".example.org"
+            self.assertEqual(self.runtime.resolve_target_id(site), site)
+        self.assertEqual(self.runtime.store.used_this_hour(parent, bucket), 30)
+        self.assertEqual(self.runtime.store.target_today(day), {parent: 90})
+        self.assertEqual(self.runtime.store.history(), before)
+        self.assertNotIn(saved, self.runtime.config["targets"])
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.assertEqual(self.runtime.resolve_target_id(saved), parent)
+        self.assertEqual(self.runtime.config["targets"][parent]["category"], "productive")
+        self.assertEqual(self.runtime.store.used_this_hour(parent, bucket), 30)
+
+    def test_explicit_smart_merges_existing_sites_when_identity_arrives_later(self):
+        parent, child, different = "site:example.org", "site:app.example.org", "site:mail.example.org"
+        for target in (parent, child, different):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "neutral"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "smart"})
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [
+            {"id": i, "domain": domain, "site_identity": {"application_name": name}}
+            for i, (domain, name) in enumerate((("example.org", "Workspace"), ("app.example.org", "Workspace"), ("mail.example.org", "Mail")))
+        ]})
+        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+        self.assertEqual(self.runtime.resolve_target_id(different), different)
+
+    def test_default_smart_automatically_merges_matching_saved_entries(self):
+        parent, child = "site:example.org", "site:app.example.org"
+        for target in (parent, child):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "neutral"})
+        self.runtime.config["site_identity"] = {domain: {"application_name": "Workspace"}
+                                                for domain in ("example.org", "app.example.org")}
+        self.runtime.link_sites({"app.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+
+    def test_grouping_moves_aliases_and_protects_detached_group_members(self):
+        parent, child, member = "site:example.org", "site:app.example.org", "app:workspace"
+        for target in (parent, child, member):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "neutral"})
+        self.runtime.handle_message({"op": "merge", "source": member, "destination": child})
+        self.runtime.config["independent_targets"] = [member]
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "group"})
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.runtime.config["independent_targets"] = []
+        self.runtime.reconcile_targets()
+        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+        self.assertEqual(self.runtime.resolve_target_id(member), parent)
+
+    def test_explicit_group_keeps_selected_site_settings_even_when_parent_exists(self):
+        parent, child, grandchild = "site:example.org", "site:tools.example.org", "site:app.tools.example.org"
+        for target in (parent, child, grandchild):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "neutral"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "separate"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "tools.example.org", "mode": "group"})
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.assertEqual(self.runtime.resolve_target_id(grandchild), child)
+
+    def test_mode_selection_updates_the_domain_family_and_shares_quota(self):
+        for target in ("site:example.org", "site:tools.example.org"):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "tools.example.org", "mode": "separate"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "group"})
+        self.runtime.link_sites({"new.example.org", "app.tools.example.org", "notexample.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:new.example.org"), "site:example.org")
+        self.assertEqual(self.runtime.resolve_target_id("site:app.tools.example.org"), "site:example.org")
+        self.assertEqual(self.runtime.resolve_target_id("site:notexample.org"), "site:notexample.org")
+        now = dt.datetime.now().astimezone()
+        self.runtime.store.add_times({"site:example.org": "consumption"}, 601,
+                                    agent.current_hour_bucket(now), now.date().isoformat())
+        self.assertEqual(self.runtime.blocked_domains(), ["app.tools.example.org", "example.org", "new.example.org", "tools.example.org"])
+        self.runtime.handle_message({"op": "unlink", "target_id": "site:new.example.org"})
+        self.runtime.link_sites({"new.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:new.example.org"), "site:new.example.org")
+
+    def test_domain_families_use_icann_suffixes_and_keep_hosted_siblings_together(self):
+        self.assertEqual(agent.domain_family("one.pages.dev"), "pages.dev")
+        self.assertEqual(agent.domain_family("two.pages.dev"), "pages.dev")
+        self.assertEqual(agent.domain_family("preview.company.co.uk"), "company.co.uk")
+        self.assertEqual(agent.domain_family("preview.other.co.uk"), "other.co.uk")
+        self.assertEqual(agent.domain_family("co.uk"), "")
+        self.assertEqual(agent.domain_family("127.0.0.1"), "127.0.0.1")
+
+    def test_smart_groups_sibling_projects_with_matching_identity_but_keeps_other_services(self):
+        first, matching, different, unknown = ("site:" + domain for domain in
+            ("one.pages.dev", "two.pages.dev", "other.pages.dev", "unknown.pages.dev"))
+        for target in (first, matching, different, unknown):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "productive"})
+        self.runtime.config["site_identity"] = {
+            "one.pages.dev": {"application_name": "Charts"},
+            "two.pages.dev": {"application_name": "Charts"},
+            "other.pages.dev": {"application_name": "Mail"},
+        }
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "one.pages.dev", "mode": "smart"})
+        self.assertEqual(self.runtime.resolve_target_id(matching), first)
+        self.assertEqual(self.runtime.resolve_target_id(different), different)
+        self.assertEqual(self.runtime.resolve_target_id(unknown), unknown)
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "one.pages.dev", "mode": "separate"})
+        self.runtime.handle_message({"op": "classify", "target_id": "site:new.pages.dev", "category": "productive"})
+        self.runtime.config["site_identity"]["new.pages.dev"] = {"application_name": "Charts"}
+        self.runtime.reconcile_targets()
+        self.assertEqual(self.runtime.resolve_target_id("site:new.pages.dev"), "site:new.pages.dev")
+
+    def test_smart_distinguishes_search_mail_and_cloud_without_service_name_lists(self):
+        targets = {"example.org": "Search", "mail.example.org": "Mail", "cloud.example.org": "Cloud", "inbox.example.org": "Mail"}
+        for domain in targets:
+            self.runtime.handle_message({"op": "classify", "target_id": "site:" + domain, "category": "productive"})
+        self.runtime.config["site_identity"] = {domain: {"application_name": name} for domain, name in targets.items()}
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "mail.example.org", "mode": "smart"})
+        self.assertEqual(self.runtime.resolve_target_id("site:inbox.example.org"), "site:mail.example.org")
+        self.assertEqual(self.runtime.resolve_target_id("site:example.org"), "site:example.org")
+        self.assertEqual(self.runtime.resolve_target_id("site:cloud.example.org"), "site:cloud.example.org")
+
+    def test_existing_project_group_rule_migrates_and_groups_pending_projects_without_a_parent_entry(self):
+        first, pending = "site:one.pages.dev", "site:two.pages.dev"
+        self.runtime.handle_message({"op": "classify", "target_id": first, "category": "productive"})
+        now = dt.datetime.now().astimezone()
+        self.runtime.store.add_times({pending: "unclassified"}, 30, agent.current_hour_bucket(now), now.date().isoformat())
+        history = self.runtime.store.history()
+        self.runtime.config["subdomain_rule_schema"] = 1
+        self.runtime.config["subdomain_rules"] = {"one.pages.dev": "group"}
+        agent.save_config(self.runtime.config)
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.config["subdomain_rules"], {"pages.dev": "group"})
+        self.assertEqual(self.runtime.resolve_target_id(pending), first)
+        self.assertNotIn("site:pages.dev", self.runtime.config["targets"])
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["grouping_scope"], "pages.dev")
+        self.assertEqual(self.runtime.store.history(), history)
+        self.assertEqual(self.runtime.store.target_today(now.date().isoformat())[first], 30)
+
+    def test_group_does_not_cross_distinct_registrable_domains_or_change_scope_on_new_pages(self):
+        first, other, child = "site:one.co.uk", "site:two.co.uk", "site:app.one.co.uk"
+        for target in (first, other):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "productive"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "one.co.uk", "mode": "group"})
+        self.runtime.link_sites({"app.one.co.uk"})
+        self.assertEqual(self.runtime.resolve_target_id(child), first)
+        self.assertEqual(self.runtime.resolve_target_id(other), other)
+
+    def test_group_subdomain_rule_applies_to_every_domain_of_a_manual_group(self):
+        primary, alias = "site:mail.example", "site:inbox.other.example"
+        for target in (primary, alias):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "productive"})
+        self.runtime.handle_message({"op": "merge", "source": alias, "destination": primary})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "mail.example", "mode": "group"})
+        self.assertEqual(self.runtime.config["subdomain_rules"]["other.example"], "group")
+        self.runtime.link_sites({"new.mail.example", "new.inbox.other.example"})
+        self.assertEqual(self.runtime.resolve_target_id("site:new.mail.example"), primary)
+        self.assertEqual(self.runtime.resolve_target_id("site:new.inbox.other.example"), primary)
+
+    def test_group_merges_neighbouring_projects_under_the_selected_domain_family(self):
+        first, second = "site:project-one.host.example", "site:project-two.host.example"
+        for target in (first, second):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "productive"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "project-one.host.example", "mode": "group"})
+        self.assertEqual(self.runtime.resolve_target_id(second), first)
+        self.assertEqual(self.runtime.resolve_target_id(first), first)
+
+    def test_pending_site_can_be_merged_into_a_saved_service(self):
+        saved, pending = "site:project-one.host.example", "site:project-two.host.example"
+        self.runtime.handle_message({"op": "classify", "target_id": saved, "category": "productive"})
+        now = dt.datetime.now().astimezone()
+        self.runtime.store.add_times({pending: "unclassified"}, 30, agent.current_hour_bucket(now), now.date().isoformat())
+        self.assertFalse(self.runtime.handle_message({"op": "merge", "source": "site:unknown.example", "destination": saved})["ok"])
+        self.assertFalse(self.runtime.handle_message({"op": "merge", "source": saved, "destination": pending})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "merge", "source": pending, "destination": saved})["ok"])
+        self.assertEqual(self.runtime.resolve_target_id(pending), saved)
+        self.assertEqual(self.runtime.store.target_today(now.date().isoformat()), {saved: 30})
+        self.assertEqual(self.runtime.store.history()[-1]["productive"], 0.5)
+        self.assertNotIn(pending, self.runtime.store.pending_targets())
+
+    def test_excluded_entries_can_be_hidden_and_restored_individually(self):
+        first, second = "site:private.example", "site:other.example"
+        for target in (first, second):
+            self.runtime.handle_message({"op": "exclude", "target_id": target})
+        self.assertFalse(self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": "site:unknown.example", "hidden": True})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": True})["ok"])
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["hidden_excluded_targets"], [first])
+        self.assertEqual(set(self.runtime.latest_state["ignored_targets"]), {first, second})
+        self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": False})
+        self.assertEqual(self.runtime.config["hidden_excluded_targets"], [])
+        self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": True})
+        self.runtime.handle_message({"op": "unexclude", "target_id": first})
+        self.assertEqual(self.runtime.config["hidden_excluded_targets"], [])
+        self.assertEqual(self.runtime.config["ignored_targets"], [second])
+
+    def test_excluded_visibility_is_persistent_and_does_not_change_exclusions_or_history(self):
+        target = "site:private.example"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "exclude", "target_id": target})
+        now = dt.datetime.now().astimezone()
+        self.runtime.store.add_times({target: "consumption"}, 15, agent.current_hour_bucket(now), now.date().isoformat())
+        before = self.runtime.store.history()
+        self.runtime.tick(0)
+        self.assertTrue(self.runtime.latest_state["hide_excluded"])
+        self.assertFalse(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": "false"})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": False})["ok"])
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.runtime.tick(0)
+        self.assertFalse(self.runtime.latest_state["hide_excluded"])
+        self.assertIn(target, self.runtime.latest_state["ignored_targets"])
+        self.assertEqual(self.runtime.store.history(), before)
+        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": True})["ok"])
+        self.assertTrue(agent.load_config()["hide_excluded"])
+
+    def test_background_metadata_groups_sites_without_tracking_background_tabs(self):
+        parent, child = "site:example.org", "site:app.example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        self.clients = []
+        response = self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": [
+            {"domain": domain, "site_name": "Workspace", "site_identity": {"application_name": "Workspace"}}
+            for domain in ("example.org", "app.example.org")
+        ]})
+        self.runtime.tick(2)
+        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+        self.assertEqual(self.runtime.browser_windows, {})
+        self.assertEqual(response["blocked_tab_ids"], [])
+        self.assertEqual(self.runtime.latest_state["diagnostics"]["matched_sites"], 0)
+        self.assertEqual(self.runtime.store.target_today(dt.date.today().isoformat()), {})
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": "invalid"})
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": [None]})
+
+    def test_snapshot_identity_is_local_sanitized_and_does_not_fetch_manifest(self):
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "domain": "app.example.org",
+            "site_identity": {"application_name": "  Workspace   App ", "manifest": "https://example.org/app.json?token=private#state"}}]})
+        self.assertEqual(self.runtime.config["site_identity"]["app.example.org"], {
+            "application_name": "Workspace App", "manifest": "https://example.org/app.json"})
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "domain": "app.example.org",
+            "site_identity": {"application_name": "Workspace", "manifest": "https://other.example.org/manifest.json"}}]})
+        self.assertEqual(self.runtime.config["site_identity"]["app.example.org"]["manifest"], "")
+
+    def test_late_metadata_groups_site_and_combines_initial_history(self):
+        parent, child = "site:example.org", "site:app.example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        self.runtime.config["site_identity"]["example.org"] = {"application_name": "Workspace"}
+        self.clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": "0x123"}]
+        window = {"id": 1, "title": "Inbox", "domain": "app.example.org", "tab_id": 10}
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window]})
+        self.runtime.tick(1)
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["id"], child)
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [
+            {**window, "site_identity": {"application_name": "Workspace"}}]})
+        self.runtime.tick(2)
+        self.assertEqual([r["id"] for r in self.runtime.latest_state["tracked"]], [parent])
+        now = dt.datetime.now().astimezone()
+        usage = self.runtime.store.target_today(now.date().isoformat())
+        self.assertNotIn(child, usage)
+        self.assertEqual(usage[parent], 3)
+
+    def test_new_web_app_uses_parent_group_rule_without_browser_extension(self):
+        parent = "site:example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "example.org", "mode": "group"})
+        self.clients = [{"app_id": "chrome-app.example.org__-default", "window_title": "Workspace", "address": "0x123"}]
+        self.runtime.tick(3)
+        self.assertEqual([row["id"] for row in self.runtime.latest_state["tracked"]], [parent])
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["today_seconds"], 3)
+
     def test_detached_entries_still_have_manual_suggestions(self):
         rows = [{"id": target, "name": "service.example", "configured": True}
                 for target in ("app:chrome-service.example__-default", "site:service.example")]
@@ -319,6 +668,112 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(self.runtime.handle_message({"op": "unexclude", "target_id": "app:test"})["ok"])
         self.runtime.tick(1)
         self.assertEqual(self.runtime.latest_state["tracked"][0]["category"], "unclassified")
+
+    def test_track_again_restores_review_without_reopening_and_survives_restart(self):
+        target = "app:test"
+        self.runtime.tick(2)
+        self.runtime.handle_message({"op": "exclude", "target_id": target})
+        self.clients = []
+        self.runtime.handle_message({"op": "unexclude", "target_id": target})
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.runtime.tick(0)
+        row = self.runtime.latest_state["tracked"][0]
+        self.assertEqual(row["id"], target)
+        self.assertFalse(row["configured"])
+        self.assertEqual(row["today_seconds"], 0)
+        self.runtime.handle_message({"op": "exclude", "target_id": target})
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["tracked"], [])
+        self.runtime.handle_message({"op": "unexclude", "target_id": target})
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "productive"})
+        self.assertEqual(self.runtime.config["review_targets"], [])
+
+    def test_track_again_joins_existing_domain_group_without_reopening(self):
+        root, child = "site:one.pages.dev", "site:two.pages.dev"
+        self.clients = []
+        self.runtime.handle_message({"op": "classify", "target_id": root, "category": "productive"})
+        self.runtime.handle_message({"op": "set_subdomain_rule", "domain": "one.pages.dev", "mode": "group"})
+        self.runtime.handle_message({"op": "exclude", "target_id": child})
+        self.runtime.handle_message({"op": "unexclude", "target_id": child})
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.resolve_target_id(child), root)
+        self.assertEqual(self.runtime.config["review_targets"], [])
+        self.assertIn(child, self.runtime.latest_state["tracked"][0]["members"])
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["today_seconds"], 0)
+
+    def test_restored_review_entry_can_merge_manually_or_with_smart_metadata(self):
+        root, child = "site:one.pages.dev", "site:two.pages.dev"
+        self.clients = []
+        self.runtime.handle_message({"op": "classify", "target_id": root, "category": "productive"})
+        self.runtime.handle_message({"op": "exclude", "target_id": child})
+        self.runtime.handle_message({"op": "unexclude", "target_id": child})
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.runtime.config["site_identity"] = {"one.pages.dev": {"application_name": "Charts"}, "two.pages.dev": {"application_name": "Charts"}}
+        self.runtime.reconcile_targets()
+        self.assertEqual(self.runtime.resolve_target_id(child), root)
+        self.assertEqual(self.runtime.config["review_targets"], [])
+        other = "app:restored"
+        self.runtime.handle_message({"op": "exclude", "target_id": other})
+        self.runtime.handle_message({"op": "unexclude", "target_id": other})
+        self.assertTrue(self.runtime.handle_message({"op": "merge", "source": other, "destination": root})["ok"])
+        self.assertEqual(self.runtime.resolve_target_id(other), root)
+        self.assertEqual(self.runtime.config["review_targets"], [])
+
+    def test_track_again_rejects_invalid_target_ids(self):
+        for target in ("", "site:", "app:", "unknown"):
+            self.assertFalse(self.runtime.handle_message({"op": "unexclude", "target_id": target})["ok"])
+        self.assertEqual(self.runtime.config["review_targets"], [])
+
+    def test_exclude_classified_group_preserves_history_settings_and_stops_limits(self):
+        for target in ("app:test", "site:example.org"):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "set_quota", "target_id": "site:example.org", "quota_minutes": 1})
+        self.runtime.handle_message({"op": "merge", "source": "app:test", "destination": "site:example.org"})
+        self.runtime.tick(61)
+        self.assertEqual(self.runtime.blocked_domains(), ["example.org"])
+        self.closed.clear()
+        history = self.runtime.store.history()
+        settings = dict(self.runtime.config["targets"]["site:example.org"])
+        self.assertTrue(self.runtime.handle_message({"op": "exclude", "target_id": "app:test"})["ok"])
+        self.runtime.tick(5)
+        self.assertEqual(self.closed, [])
+        self.assertEqual(self.runtime.blocked_domains(), [])
+        self.assertEqual(self.runtime.latest_state["tracked"], [])
+        self.assertEqual(self.runtime.store.history(), history)
+        self.runtime.store.db.close()
+        self.runtime = agent.Runtime()
+        self.assertEqual(self.runtime.config["targets"]["site:example.org"], settings)
+        self.assertEqual(self.runtime.config["ignored_targets"], ["site:example.org"])
+        self.runtime.handle_message({"op": "unexclude", "target_id": "app:test"})
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["category"], "consumption")
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["quota_seconds"], 60)
+        self.assertEqual(self.runtime.blocked_domains(), ["example.org"])
+
+    def test_browser_connection_waits_for_launch_and_resets_after_close(self):
+        with mock.patch.object(agent, "browser_is_running", return_value=False):
+            self.runtime.tick(0)
+            self.assertFalse(self.runtime.latest_state["diagnostics"]["browser_connection_expected"])
+        with mock.patch.object(agent, "browser_is_running", return_value=True), mock.patch.object(agent.time, "monotonic", return_value=100):
+            self.runtime.tick(0)
+            self.assertFalse(self.runtime.latest_state["diagnostics"]["browser_connection_expected"])
+        self.runtime.paused = True
+        with mock.patch.object(agent, "browser_is_running", return_value=True), mock.patch.object(agent.time, "monotonic", return_value=109):
+            self.runtime.tick(0)
+            self.assertTrue(self.runtime.latest_state["diagnostics"]["browser_connection_expected"])
+        with mock.patch.object(agent, "browser_is_running", return_value=False):
+            self.runtime.tick(0)
+            self.assertFalse(self.runtime.latest_state["diagnostics"]["browser_running"])
+            self.assertFalse(self.runtime.latest_state["diagnostics"]["browser_connection_expected"])
+            self.assertIsNone(self.runtime.browser_opened_at)
+
+    def test_browser_detection_includes_other_workspaces(self):
+        with mock.patch.object(agent, "hypr_json", return_value=[{"class": "Chromium", "mapped": True, "workspace": {"id": 7}}]):
+            self.assertTrue(agent.browser_is_running())
+        for client in ({"class": "foot"}, {"class": "chromium", "mapped": False}):
+            with mock.patch.object(agent, "hypr_json", return_value=[client]):
+                self.assertFalse(agent.browser_is_running())
 
     def test_focused_browser_uses_matching_site(self):
         self.clients = [{"app_id": "chromium", "window_title": "A post - Chromium", "address": "0x123"}]

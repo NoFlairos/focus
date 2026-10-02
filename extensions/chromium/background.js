@@ -5,7 +5,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   let domain;
   try { domain = new URL(sender.url).hostname; } catch (_) { return; }
   if (domain !== message.domain) return;
-  siteMetadata.set(sender.tab.id, {domain, name: String(message.name || "").slice(0, 120)});
+  siteMetadata.set(sender.tab.id, {domain, name: String(message.name || "").slice(0, 120), identity: message.identity || {}});
   sendSnapshot();
 });
 chrome.tabs.onRemoved.addListener(id => siteMetadata.delete(id));
@@ -32,6 +32,16 @@ function connect() {
   }
 }
 
+function tabSite(tab) {
+  try {
+    const url = new URL(tab.url);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    const saved = siteMetadata.get(tab.id);
+    const metadata = saved?.domain === url.hostname ? saved : null;
+    return {domain: url.hostname, site_name: metadata?.name || "", site_identity: metadata?.identity || null};
+  } catch (_) { return null; }
+}
+
 async function sendSnapshot() {
   if (!port) return;
   try {
@@ -40,21 +50,26 @@ async function sendSnapshot() {
       .filter(win => win.state !== "minimized")
       .map(win => {
         const tab = (win.tabs || []).find(candidate => candidate.active);
-        if (!tab || !tab.url) return null;
-        let parsed;
-        try { parsed = new URL(tab.url); } catch (_) { return null; }
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+        const site = tab && tabSite(tab);
+        if (!site) return null;
         return {
           id: win.id,
           tab_id: tab.id,
           state: win.state || "normal",
           title: tab.title || win.title || "",
-          domain: parsed.hostname,
-          site_name: siteMetadata.get(tab.id)?.domain === parsed.hostname ? siteMetadata.get(tab.id).name : "",
+          ...site,
         };
       })
       .filter(Boolean);
-    port.postMessage({ windows: visible, browser_id: browserId });
+    const metadata = new Map();
+    for (const win of windows) {
+      for (const tab of win.tabs || []) {
+        const site = tabSite(tab);
+        if (site?.site_identity) metadata.set(site.domain, site);
+      }
+    }
+    // Background tabs provide service identity only, never activity or close targets.
+    port.postMessage({ windows: visible, browser_id: browserId, site_metadata: [...metadata.values()] });
   } catch (_) {
     // A browser shutdown or permissions change is recovered on the next tick.
   }

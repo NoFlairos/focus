@@ -41,6 +41,32 @@ Panel {
   readonly property var dataAction: widget && widget.snapshot ? widget.snapshot.data_action || ({}) : ({})
   readonly property var weekly: widget && widget.snapshot ? widget.snapshot.weekly || ({}) : ({})
   readonly property var suggestions: widget && widget.snapshot ? widget.snapshot.suggestions || [] : []
+  readonly property var subdomainRules: widget && widget.snapshot ? widget.snapshot.subdomain_rules || ({}) : ({})
+  property var pendingSubdomainRules: ({})
+  onSubdomainRulesChanged: {
+    var pending = Object.assign({}, pendingSubdomainRules)
+    Object.keys(pending).forEach(function(domain) {
+      if (pending[domain] === root.subdomainRules[domain]) delete pending[domain]
+    })
+    pendingSubdomainRules = pending
+  }
+  Timer {
+    id: subdomainAckTimer
+    interval: 5000
+    onTriggered: root.pendingSubdomainRules = ({})
+  }
+  function setSubdomainRule(domain, mode, family) {
+    var pending = Object.assign({}, pendingSubdomainRules)
+    pending[family || domain] = mode
+    pendingSubdomainRules = pending
+    runAgent(["subdomains", domain, mode])
+    subdomainAckTimer.restart()
+  }
+  function siteScopes(row) {
+    if (row.id.startsWith("site:")) return [row.id.slice(5)]
+    var sites = (row.members || []).filter(function(id) { return id.startsWith("site:") }).sort()
+    return sites.length ? [sites[0].slice(5)] : []
+  }
   onDataActionChanged: {
     if (dataBusy && String(dataAction.id || "") !== dataBeforeId) {
       dataBusy = false
@@ -72,6 +98,7 @@ Panel {
   property string detachingMember: ""
   property string detachFeedback: ""
   property var mergeChoices: []
+  readonly property var mergeDestinations: mergeChoices.filter(function(row) { return row.configured })
 
   function matchesApp(id, name, category) {
     if (appFilter !== "all" && (pendingCategories[id] || category) !== appFilter) return false
@@ -79,7 +106,60 @@ Panel {
     var search = appSearch.trim().toLowerCase()
     return !search || [name, id].concat(row && row.members ? row.members : []).join(" ").toLowerCase().indexOf(search) >= 0
   }
-  readonly property var filteredIgnored: appFilter === "all" ? ignoredTargets.filter(function(id) {
+  property var pendingHideExcluded: null
+  readonly property bool savedHideExcluded: !widget || !widget.snapshot || widget.snapshot.hide_excluded !== false
+  readonly property bool hideExcluded: pendingHideExcluded === null ? savedHideExcluded : pendingHideExcluded
+  onSavedHideExcludedChanged: {
+    if (pendingHideExcluded !== null && savedHideExcluded === pendingHideExcluded) {
+      pendingHideExcluded = null
+      excludedVisibilityTimer.stop()
+    }
+  }
+  Timer {
+    id: excludedVisibilityTimer
+    interval: 5000
+    onTriggered: root.pendingHideExcluded = null
+  }
+  function toggleExcludedVisibility() {
+    pendingHideExcluded = !hideExcluded
+    runAgent(["excluded-visibility", pendingHideExcluded ? "hide" : "show"])
+    excludedVisibilityTimer.restart()
+  }
+  property bool revealHiddenExcluded: false
+  property var pendingHiddenEntries: ({})
+  readonly property var savedHiddenEntries: widget && widget.snapshot ? widget.snapshot.hidden_excluded_targets || [] : []
+  readonly property var hiddenExcludedTargets: {
+    var hidden = savedHiddenEntries.slice()
+    Object.keys(pendingHiddenEntries).forEach(function(id) {
+      var index = hidden.indexOf(id)
+      if (pendingHiddenEntries[id] && index < 0) hidden.push(id)
+      else if (!pendingHiddenEntries[id] && index >= 0) hidden.splice(index, 1)
+    })
+    return hidden
+  }
+  onSavedHiddenEntriesChanged: {
+    var pending = Object.assign({}, pendingHiddenEntries)
+    Object.keys(pending).forEach(function(id) {
+      if ((root.savedHiddenEntries.indexOf(id) >= 0) === pending[id]) delete pending[id]
+    })
+    pendingHiddenEntries = pending
+  }
+  Timer {
+    id: hiddenEntryAckTimer
+    interval: 5000
+    onTriggered: root.pendingHiddenEntries = ({})
+  }
+  onOpenedChanged: if (!opened) revealHiddenExcluded = false
+  onHideExcludedChanged: if (hideExcluded) revealHiddenExcluded = false
+  function setExcludedEntryHidden(id, hidden) {
+    var pending = Object.assign({}, pendingHiddenEntries)
+    pending[id] = hidden
+    pendingHiddenEntries = pending
+    runAgent(["excluded-entry-visibility", id, hidden ? "hide" : "show"])
+    hiddenEntryAckTimer.restart()
+  }
+  readonly property var filteredIgnored: !hideExcluded && appFilter === "all" ? ignoredTargets.filter(function(id) {
+    if (!root.revealHiddenExcluded && root.hiddenExcludedTargets.indexOf(id) >= 0) return false
     return !root.appSearch.trim() || (id + " " + root.displayName({id:id, name:id.split(":").slice(1).join(":")}))
       .toLowerCase().indexOf(root.appSearch.trim().toLowerCase()) >= 0
   }) : []
@@ -149,9 +229,9 @@ Panel {
   }
 
   function refreshMergeChoices() {
-    mergeChoices = tracked.filter(function(row) { return row.configured }).map(function(row) {
+    mergeChoices = tracked.filter(function(row) { return root.ignoredTargets.indexOf(row.id) < 0 }).map(function(row) {
       return { id: row.id, name: row.name, identity: row.id.split(":").slice(1).join(":"),
-        category: row.category, quota: Math.round(Number(row.quota_seconds) / 60) }
+        category: row.category, quota: Math.round(Number(row.quota_seconds) / 60), configured: !!row.configured }
     })
     mergeSource.value = ""
     mergeDestination.value = ""
@@ -240,6 +320,7 @@ Panel {
   property var commandQueue: []
 
   function modelRow(row) {
+    var scopes = root.siteScopes(row)
     return {
       targetId: String(row.id || ""),
       targetName: String(row.name || ""),
@@ -251,6 +332,9 @@ Panel {
       todaySeconds: Number(row.today_seconds || 0),
       linked: !!row.linked,
       memberIds: JSON.stringify(row.members || []),
+      siteScopeIds: JSON.stringify(scopes),
+      domainFamily: String(row.grouping_scope || scopes[0] || ""),
+      domainFamilies: JSON.stringify(row.grouping_scopes || scopes),
       configured: !!row.configured,
       focused: !!row.focused
     }
@@ -512,6 +596,7 @@ Panel {
 
       Flickable {
         id: flick
+        objectName: "activityScroll"
         anchors.fill: parent
         anchors.margins: Style.space(12)
         contentWidth: content.width
@@ -941,17 +1026,17 @@ Panel {
                 id: mergeDestination
                 objectName: "mergeDestination"
                 width: parent.width
-                model: root.mergeChoices
+                model: root.mergeDestinations
                 enabled: !root.mergingSource && !root.detachingMember
                 onChanged: root.mergeFeedback = ""
               }
               Text {
                 width: parent.width
                 text: {
-                  var target = root.mergeChoices[mergeDestination.currentIndex]
+                  var target = root.mergeDestinations[mergeDestination.currentIndex]
                   return target ? "Keeps " + target.category + (target.category === "consumption" ? " · " + target.quota + " min/hour" : "")
                     + ". Histories are combined permanently. Future use counts once, even when both are open."
-                    : root.mergeChoices.length < 2 ? "Classify two entries to create a group."
+                    : root.mergeChoices.length < 2 ? "Save one entry to start a group."
                     : "Choose the settings to keep."
                 }
                 color: root.mutedText
@@ -963,7 +1048,7 @@ Panel {
                 text: root.mergingSource ? "Merging…" : "Merge entries"
                 enabled: root.serviceConnected && !root.mergingSource && !root.detachingMember && root.mergeChoices.length > 1
                   && mergeSource.currentIndex >= 0 && mergeDestination.currentIndex >= 0
-                  && mergeSource.currentIndex !== mergeDestination.currentIndex
+                  && mergeSource.value !== mergeDestination.value
                 foreground: root.textColor
                 bordered: true
                 focusable: true
@@ -971,7 +1056,7 @@ Panel {
                 opacity: enabled ? 1 : 0.4
                 onClicked: {
                   var source = root.mergeChoices[mergeSource.currentIndex].id
-                  var destination = root.mergeChoices[mergeDestination.currentIndex].id
+                  var destination = root.mergeDestinations[mergeDestination.currentIndex].id
                   root.mergingSource = source
                   root.mergeFeedback = ""
                   root.runAgent(["merge", source, destination])
@@ -1004,13 +1089,14 @@ Panel {
                     width: parent.width
                     objectName: "suggestionLabel"
                     textFormat: Text.PlainText
-                    text: modelData.name + " · possible group"
+                    text: modelData.name + " · " + (modelData.reason || "Possible group")
                     color: root.textColor
                     font.pixelSize: Style.font.bodySmall
                   }
                   Text {
                     width: parent.width
-                    text: modelData.source.split(":").slice(1).join(":") + " · " + modelData.destination.split(":").slice(1).join(":")
+                    text: (modelData.source_domain || modelData.source.split(":").slice(1).join(":"))
+                      + " → " + (modelData.destination_domain || modelData.destination.split(":").slice(1).join(":"))
                     textFormat: Text.PlainText
                     color: root.mutedText
                     font.pixelSize: Style.font.caption
@@ -1192,6 +1278,9 @@ Panel {
                 required property bool linked
                 required property bool configured
                 required property bool focused
+                required property string siteScopeIds
+                required property string domainFamily
+                required property string domainFamilies
                 readonly property var entry: ({
                   id: targetId,
                   name: targetName,
@@ -1201,7 +1290,10 @@ Panel {
                   used_seconds: usedSeconds,
                   today_seconds: todaySeconds,
                   linked: linked,
-                  focused: focused
+                  focused: focused,
+                  site_scopes: JSON.parse(siteScopeIds),
+                  grouping_scope: domainFamily,
+                  grouping_scopes: JSON.parse(domainFamilies)
                 })
                 width: parent.width
                 spacing: Style.space(7)
@@ -1380,23 +1472,60 @@ Panel {
                     }
                   }
 
-                  Rectangle {
-                    visible: root.page === "review"
+                  Repeater {
+                    model: root.page === "manage" ? targetCard.entry.site_scopes : []
+                    delegate: Column {
+                      id: scopeCard
+                      required property string modelData
+                      readonly property string mode: root.pendingSubdomainRules[targetCard.entry.grouping_scope] || root.subdomainRules[targetCard.entry.grouping_scope] || "smart"
+                      width: parent.width
+                      spacing: Style.space(5)
+                      Text {
+                        text: "DOMAINS · " + targetCard.entry.grouping_scopes.join(" · ")
+                        textFormat: Text.PlainText
+                        width: parent.width
+                        elide: Text.ElideMiddle
+                        color: root.mutedText
+                        font.pixelSize: Style.font.caption
+                      }
+                      Row {
+                        width: parent.width
+                        spacing: Style.space(5)
+                        Repeater {
+                          model: [
+                            {id: "smart", label: "Smart", hint: "Match declared application names or manifest URLs. Sites without a match stay separate."},
+                            {id: "group", label: "Group", hint: "Group all sites in these domain families. Recorded time is combined."},
+                            {id: "separate", label: "Separate", hint: "Keep sites in these domain families independent. Existing links stay."}
+                          ]
+                          delegate: Omarchy.Button {
+                            required property var modelData
+                            objectName: modelData.id === "group" ? "subdomainGroupButton" : "subdomainModeButton"
+                            width: (parent.width - parent.spacing * 2) / 3
+                            text: modelData.label
+                            tooltipText: modelData.hint
+                            foreground: root.textColor
+                            fontSize: Style.font.bodySmall
+                            bordered: true
+                            focusable: true
+                            selected: scopeCard.mode === modelData.id
+                            enabled: root.serviceConnected
+                            onClicked: root.setSubdomainRule(scopeCard.modelData, modelData.id, targetCard.entry.grouping_scope)
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  Omarchy.Button {
+                    objectName: "excludeTargetButton"
+                    visible: root.page === "review" || root.page === "manage"
                     width: parent.width
-                    height: Style.space(28)
-                    radius: Style.cornerRadius
-                    color: root.hoverSurface
-                    Text {
-                      anchors.centerIn: parent
-                      text: "Exclude from tracking"
-                      color: root.mutedText
-                      font.pixelSize: Style.font.bodySmall
-                    }
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.excludeTarget(targetCard.entry.id)
-                    }
+                    text: "Exclude from tracking"
+                    foreground: root.textColor
+                    fontSize: Style.font.bodySmall
+                    bordered: true
+                    focusable: true
+                    onClicked: root.excludeTarget(targetCard.entry.id)
                   }
 
                   Row {
@@ -1576,19 +1705,50 @@ Panel {
             }
 
             Column {
-              visible: root.page === "manage" && root.manageSection === "apps" && root.filteredIgnored.length > 0
+              visible: root.page === "manage" && root.manageSection === "apps" && root.appFilter === "all" && root.ignoredTargets.length > 0
               width: parent.width
               spacing: Style.space(7)
-              Text {
+              Row {
                 width: parent.width
-                text: "EXCLUDED FROM TRACKING"
-                color: root.mutedText
-                font.pixelSize: Style.font.caption
-                font.bold: true
+                spacing: Style.space(8)
+                Text {
+                  width: parent.width - excludedToggle.width - (hiddenToggle.visible ? hiddenToggle.width + parent.spacing : 0) - parent.spacing
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "EXCLUDED FROM TRACKING"
+                  color: root.mutedText
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+                Omarchy.Button {
+                  id: excludedToggle
+                  objectName: "excludedVisibilityButton"
+                  width: Style.space(80)
+                  text: root.hideExcluded ? "Show" : "Hide"
+                  foreground: root.textColor
+                  fontSize: Style.font.bodySmall
+                  bordered: true
+                  focusable: true
+                  enabled: root.serviceConnected
+                  onClicked: root.toggleExcludedVisibility()
+                }
+                Omarchy.Button {
+                  id: hiddenToggle
+                  objectName: "revealHiddenExcludedButton"
+                  width: Style.space(112)
+                  visible: !root.hideExcluded && root.hiddenExcludedTargets.some(function(id) { return root.ignoredTargets.indexOf(id) >= 0 })
+                  text: "Show hidden"
+                  selected: root.revealHiddenExcluded
+                  foreground: root.textColor
+                  fontSize: Style.font.caption
+                  bordered: true
+                  focusable: true
+                  onClicked: root.revealHiddenExcluded = !root.revealHiddenExcluded
+                }
               }
               Repeater {
                 model: root.filteredIgnored
                 delegate: Rectangle {
+                  objectName: "excludedEntry"
                   required property string modelData
                   width: parent.width
                   height: Style.space(44)
@@ -1601,7 +1761,7 @@ Panel {
                     anchors.margins: Style.space(8)
                     spacing: Style.space(8)
                     Text {
-                      width: parent.width - restoreButton.width - parent.spacing
+                      width: parent.width - restoreButton.width - hideEntryButton.width - parent.spacing * 2
                       height: parent.height
                       textFormat: Text.PlainText
                       text: root.displayName({ id: modelData, name: modelData.split(":").slice(1).join(":") })
@@ -1609,6 +1769,20 @@ Panel {
                       font.pixelSize: Style.font.bodySmall
                       elide: Text.ElideRight
                       verticalAlignment: Text.AlignVCenter
+                    }
+                    Omarchy.Button {
+                      id: hideEntryButton
+                      objectName: "hideExcludedEntryButton"
+                      width: Style.space(64)
+                      height: parent.height
+                      readonly property bool entryHidden: root.hiddenExcludedTargets.indexOf(modelData) >= 0
+                      text: entryHidden ? "Unhide" : "Hide"
+                      foreground: root.textColor
+                      fontSize: Style.font.caption
+                      bordered: true
+                      focusable: true
+                      enabled: root.serviceConnected
+                      onClicked: root.setExcludedEntryHidden(modelData, !entryHidden)
                     }
                     Rectangle {
                       id: restoreButton
@@ -1637,7 +1811,10 @@ Panel {
             ManageHeader {
               label: "Diagnostics"; section: "diagnostics"
               statusText: !root.serviceConnected ? "Service offline"
-                : root.diagnostics.browser_connected ? "Connected" : "Browser offline"
+                : root.diagnostics.browser_connected && root.diagnostics.browser_can_close_tabs === false ? "Reload extension"
+                : root.diagnostics.browser_connected ? "Connected"
+                : !root.diagnostics.browser_running ? "Browser closed"
+                : !root.diagnostics.browser_connection_expected ? "Connecting" : "Browser offline"
             }
             Column {
               visible: root.page === "manage" && root.manageSection === "diagnostics"
@@ -1651,7 +1828,10 @@ Panel {
               }
               Text {
                 width: parent.width
-                text: "Browser extension · " + (root.serviceConnected && root.diagnostics.browser_connected ? "Connected" : "Not connected")
+                text: "Browser extension · " + (!root.serviceConnected ? "Unavailable"
+                  : root.diagnostics.browser_connected ? "Connected"
+                  : !root.diagnostics.browser_running ? "Browser closed"
+                  : !root.diagnostics.browser_connection_expected ? "Connecting" : "Not connected")
                 color: root.textColor
                 font.pixelSize: Style.font.bodySmall
               }
@@ -1659,6 +1839,7 @@ Panel {
                 width: parent.width
                 text: !root.serviceConnected ? "Start the Focus user service or run the local installer."
                   : !root.diagnostics.browser_connected ? "Keep website distractions in check."
+                  : root.diagnostics.browser_can_close_tabs === false ? "Reload Focus in chrome://extensions to enable tab closing."
                   : root.paused ? "Tracking and limits are paused."
                   : !root.working ? "Tracking is inactive: check your schedule or session idle state."
                   : Number(root.diagnostics.matched_sites || 0) + " visible site(s) recognized."
@@ -1963,6 +2144,48 @@ Panel {
             }
           }
         }
+      }
+
+      Row {
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: Style.space(20)
+        spacing: Style.space(6)
+
+        Repeater {
+          model: [
+            {bottom: false, symbol: "↑", hint: "Back to top"},
+            {bottom: true, symbol: "↓", hint: "Go to bottom"}
+          ]
+          delegate: Omarchy.Button {
+            required property var modelData
+            objectName: modelData.bottom ? "scrollToBottomButton" : "scrollToTopButton"
+            width: Style.space(36)
+            height: Style.space(36)
+            text: modelData.symbol
+            tooltipText: modelData.hint
+            visible: (modelData.bottom ? flick.contentHeight - flick.height - flick.contentY : flick.contentY) > Style.space(80)
+            foreground: root.textColor
+            background: root.solidPopup
+            fontSize: Style.font.body
+            bordered: true
+            focusable: true
+            onClicked: {
+              root.finishScheduleEditing()
+              flick.cancelFlick()
+              scrollJump.stop()
+              scrollJump.to = modelData.bottom ? Math.max(0, flick.contentHeight - flick.height) : 0
+              scrollJump.restart()
+            }
+          }
+        }
+      }
+      NumberAnimation {
+        id: scrollJump
+        target: flick
+        property: "contentY"
+        duration: 180
+        easing.type: Easing.OutCubic
       }
 
     }

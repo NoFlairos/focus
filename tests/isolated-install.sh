@@ -7,6 +7,20 @@ cat > /test/bin/systemctl <<'SH'
 printf '%s\n' "$*" >> /test/systemctl-requests.log
 SH
 chmod +x /test/bin/systemctl
+cat > /test/bin/hyprctl <<'PYTHON'
+#!/usr/bin/python3
+import pathlib, sys
+fixture = pathlib.Path('/test/visible-browser.json')
+if not fixture.exists():
+    print('[]')
+elif sys.argv[-1] == 'monitors':
+    print('[{"activeWorkspace":{"id":1}}]')
+elif sys.argv[-1] == 'clients':
+    print(fixture.read_text())
+else:
+    print('{}')
+PYTHON
+chmod +x /test/bin/hyprctl
 export PATH="/test/bin:/usr/bin"
 export XDG_DATA_HOME=/test/data XDG_CONFIG_HOME=/test/config XDG_STATE_HOME=/test/state XDG_RUNTIME_DIR=/test/runtime
 unset DBUS_SESSION_BUS_ADDRESS HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY DISPLAY XDG_SESSION_ID

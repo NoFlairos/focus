@@ -35,7 +35,7 @@ Get started: https://github.com/NoFlairos/focus#install
 | --- | --- |
 | tabs | Match active domains, titles and tab/window IDs to visible desktop windows; close eligible tabs at their limit. |
 | nativeMessaging | Exchange site metadata and limit decisions with the local helper. |
-| HTTP/HTTPS content scripts | Read application-name or og:site_name metadata for labels. |
+| HTTP/HTTPS content scripts | Read declared application names and manifest references for labels and grouping; manifests are not fetched. |
 
 Titles and matching data are transient. Domains, declared site names, usage and
 settings may be stored locally. No page body, form fields, passwords or cookies
@@ -44,7 +44,7 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 
 ## Files and links
 
-- ZIP: `dist/focus-chrome-0.4.1.zip`
+- ZIP: `dist/focus-chrome-0.5.0.zip`
 - Icon: `extensions/chromium/icons/128.png`
 - Promo: `release/assets/promo-440x280.png`
 - Screenshots: `release/assets/extension-connected.png` and `extension-offline.png`

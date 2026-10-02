@@ -7,6 +7,8 @@ unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/focus-ratio"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/focus-ratio"
 
+python3 -c 'import ctypes; ctypes.CDLL("libpsl.so.5")' || { printf 'Focus requires libpsl. Install the libpsl package first.\n' >&2; exit 1; }
+
 mkdir -p "$install_dir" "$install_dir/browser" "$install_dir/browser/icons" "$unit_dir" "$config_dir" "$state_dir"
 install -m 0755 "$repo_dir/agent/focus_ratio_agent.py" "$install_dir/focus_ratio_agent.py"
 install -m 0644 "$repo_dir"/extensions/chromium/*.json "$repo_dir"/extensions/chromium/*.js "$repo_dir"/extensions/chromium/*.html "$install_dir/browser/"

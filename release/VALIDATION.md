@@ -1,11 +1,13 @@
-# Validation — 2026-09-29
+# Validation — 2026-10-02
 
-**Passed:** 40 Python tests, browser enforcement tests, Qt panel integration,
+**Passed:** 73 Python tests, browser enforcement tests, Qt panel integration,
 Omarchy manifest validation and systemd unit-file validation.
 
 An isolated Chromium 152 profile loaded the real extension and connected to the
 installed native host and helper. Connection loss, warning persistence and
 installation/removal passed; uninstall retained history as documented.
+Smart/Group linking, rule migration, exclusions, immediate Track again recovery,
+privacy controls and both scroll shortcuts have regression coverage.
 
 Reproduce with `./scripts/check-isolated.sh`. Bubblewrap isolates network/processes
 and uses temporary profiles and XDG folders, without the personal desktop or

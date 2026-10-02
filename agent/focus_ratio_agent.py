@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import configparser
 import csv
+import ctypes
 import datetime as dt
 import functools
 import json
+import ipaddress
 import os
 import pathlib
 import re
@@ -111,9 +113,16 @@ def default_config() -> dict[str, Any]:
         "schedule": {"weekdays": [0, 1, 2, 3, 4], "start": "08:00", "end": "17:00"},
         "default_quota_minutes": DEFAULT_QUOTA_MINUTES,
         "targets": {},
+        "review_targets": [],
         "ignored_targets": [],
+        "hide_excluded": True,
+        "hidden_excluded_targets": [],
         "service_links": {},
         "site_names": {},
+        "site_identity": {},
+        "subdomain_rules": {},
+        "subdomain_destinations": {},
+        "subdomain_rule_schema": 2,
         "link_schema": 2,
         "independent_targets": [],
         "warn_before_limit": True,
@@ -134,16 +143,12 @@ def load_config() -> dict[str, Any]:
         value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
         if not isinstance(value, dict) or value.get("version") != 1:
             raise ValueError("unsupported config")
-        value.setdefault("schedule", default_config()["schedule"])
-        value.setdefault("default_quota_minutes", DEFAULT_QUOTA_MINUTES)
-        value.setdefault("targets", {})
-        value.setdefault("ignored_targets", [])
-        value.setdefault("service_links", {})
-        value.setdefault("site_names", {})
-        value.setdefault("independent_targets", [])
-        value.setdefault("warn_before_limit", True)
-        value.setdefault("dismissed_suggestions", [])
-        value.setdefault("pause_state", {"active": False, "until": None})
+        defaults = default_config()
+        # Missing schemas must still trigger migrations for older settings.
+        defaults.pop("link_schema")
+        defaults["subdomain_rule_schema"] = 1
+        for key, default in defaults.items():
+            value.setdefault(key, default)
         return value
     except FileNotFoundError:
         value = default_config()
@@ -185,6 +190,12 @@ def focused_window_address() -> str:
         return str(json.loads(result.stdout).get("address") or "")
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, AttributeError):
         return ""
+
+
+def browser_is_running() -> bool:
+    # Include windows on other workspaces, even while tracking is paused.
+    return any(str(client.get("class") or client.get("initialClass") or "").casefold() in BROWSER_APP_IDS
+               and client.get("mapped") is not False for client in hypr_json("clients"))
 
 
 def visible_clients() -> list[dict[str, Any]]:
@@ -459,6 +470,38 @@ class Store:
             self.db.execute("DELETE FROM daily_usage WHERE target_id=? AND category='unclassified'", (target_id,))
 
 
+@functools.lru_cache(maxsize=1)
+def public_suffix_context():
+    """Use the system's maintained suffix data without fetching anything."""
+    library = ctypes.CDLL("libpsl.so.5")
+    library.psl_builtin.restype = ctypes.c_void_p
+    library.psl_is_public_suffix2.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    library.psl_is_public_suffix2.restype = ctypes.c_int
+    return library, library.psl_builtin()
+
+
+@functools.lru_cache(maxsize=2048)
+def domain_family(domain: str) -> str:
+    """Return the registrable ICANN domain, including hosted sibling projects."""
+    domain = canonical_domain(domain)
+    if not domain:
+        return ""
+    try:
+        ipaddress.ip_address(domain)
+        return domain
+    except ValueError:
+        pass
+    library, context = public_suffix_context()
+    labels = domain.split(".")
+    for index in range(len(labels)):
+        suffix = ".".join(labels[index:])
+        # ICANN rules define the domain family. Private hosting boundaries
+        # must not prevent an explicitly selected Group from joining siblings.
+        if library.psl_is_public_suffix2(context, suffix.encode("utf-8"), 1):
+            return ".".join(labels[index - 1:]) if index else ""
+    return domain
+
+
 class Runtime:
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -476,10 +519,12 @@ class Runtime:
                     self.config["service_links"][source] = exact
             self.config["link_schema"] = 2
             save_config(self.config)
+        self.migrate_subdomain_rules()
         self.reconcile_targets()
         self.browser_sessions: dict[str, tuple[float, list]] = {}
         self.browser_windows: dict[str, dict[str, Any]] = {}
         self.last_browser_snapshot = 0.0
+        self.browser_opened_at: float | None = None
         self.paused = bool(self.config["pause_state"].get("active"))
         self.pause_until = self.config["pause_state"].get("until")
         self.warned_limits: set[tuple[str, str]] = set()
@@ -513,19 +558,46 @@ class Runtime:
     def group_suggestions(self, rows: list[dict]) -> list[dict]:
         # Detachment prevents automatic linking, not suggestions for manual review.
         candidates = [row for row in rows if row["configured"]]
+
+        def domains(row: dict) -> set[str]:
+            found = set()
+            for member in set(row.get("members", [])) | {row["id"]}:
+                site = ""
+                if member.startswith("site:"):
+                    site = member
+                elif member.startswith("app:"):
+                    site = service_site_for_app(member[4:])
+                if site:
+                    found.add(canonical_domain(site[5:]))
+            return found
+
         suggestions = []
+        site_domains = {row["id"]: domains(row) for row in candidates}
         for index, source in enumerate(candidates):
             name = re.sub(r"[^\w]", "", source["name"].casefold())
-            if len(name) < 3:
-                continue
             for destination in candidates[index + 1:]:
                 key = "|".join(sorted((source["id"], destination["id"])))
                 if key in self.config["dismissed_suggestions"]:
                     continue
-                if name == re.sub(r"[^\w]", "", destination["name"].casefold()):
-                    suggestions.append({"source": source["id"], "destination": destination["id"],
-                                        "name": source["name"], "reason": "Matching names"})
-        return suggestions[:8]
+                related = []
+                for first in site_domains[source["id"]]:
+                    for second in site_domains[destination["id"]]:
+                        if first.endswith("." + second):
+                            related.append((first, second, source, destination))
+                        elif second.endswith("." + first):
+                            related.append((second, first, destination, source))
+                if related:
+                    # Keep the parent group's settings; prefer the closest parent.
+                    child, parent, child_row, parent_row = min(
+                        related, key=lambda item: (item[0].count(".") - item[1].count("."), item[0], item[1]))
+                    priority = 0 if child_row.get("category") == parent_row.get("category") else 1
+                    suggestions.append((priority, {"source": child_row["id"], "destination": parent_row["id"],
+                        "name": parent, "reason": "Subdomain", "source_domain": child, "destination_domain": parent}))
+                elif len(name) >= 3 and name == re.sub(r"[^\w]", "", destination["name"].casefold()):
+                    suggestions.append((2, {"source": source["id"], "destination": destination["id"],
+                                        "name": source["name"], "reason": "Matching names"}))
+        suggestions.sort(key=lambda item: (item[0], item[1]["destination"], item[1]["source"]))
+        return [suggestion for _, suggestion in suggestions[:8]]
 
     def resolve_target_id(self, target_id: str) -> str:
         visited = set()
@@ -538,6 +610,85 @@ class Runtime:
                 return self.resolve_target_id(inferred)
         return target_id
 
+    def migrate_subdomain_rules(self) -> None:
+        if self.config["subdomain_rule_schema"] >= 2:
+            return
+        rules, destinations = {}, {}
+        for domain, mode in self.config["subdomain_rules"].items():
+            family = domain_family(domain)
+            if not family:
+                continue
+            rules[family] = mode
+            target = self.resolve_target_id("site:" + domain)
+            if target in self.config["targets"]:
+                destinations[family] = target
+        self.config["subdomain_rules"] = rules
+        self.config["subdomain_destinations"] = destinations
+        self.config["subdomain_rule_schema"] = 2
+        save_config(self.config)
+
+    def site_identity_matches(self, first: str, second: str) -> bool:
+        first = self.config["site_identity"].get(first, {})
+        second = self.config["site_identity"].get(second, {})
+        application = first.get("application_name", "").casefold()
+        other_application = second.get("application_name", "").casefold()
+        if application and other_application and application != other_application:
+            return False
+        return bool((application and application == other_application)
+                    or (first.get("manifest") and first.get("manifest") == second.get("manifest")))
+
+    def link_sites(self, domains: set[str]) -> None:
+        """Group sibling sites within a domain family; Smart requires shared identity."""
+        targets = self.config["targets"]
+        known = set(targets) | self.store.target_ids() | set(self.config["review_targets"])
+        ignored = set(self.config["ignored_targets"])
+        independent = set(self.config["independent_targets"])
+        anchors = {key[5:] for key in set(targets) | set(self.config["service_links"])
+                   if key.startswith("site:") and self.resolve_target_id(key) in targets}
+        domains = set(domains) | set(self.config["site_identity"]) | {key[5:] for key in known if key.startswith("site:")}
+        domains.update(site[5:] for app in known if app.startswith("app:")
+                       for site in [service_site_for_app(app[4:])] if site)
+        changed = False
+        for domain in sorted(domains, key=lambda value: (value.count("."), value)):
+            site = "site:" + domain
+            family = domain_family(domain)
+            mode = self.config["subdomain_rules"].get(family, "smart")
+            if not family or mode == "separate" or site in ignored | independent or site in self.config["service_links"]:
+                continue
+            web_apps = {key for key in known | ignored | independent
+                        if key.startswith("app:") and service_site_for_app(key[4:]) == site}
+            if web_apps & (ignored | independent):
+                continue
+            members = {alias for alias in self.config["service_links"] if self.resolve_target_id(alias) == site}
+            if members & (ignored | independent):
+                continue
+            preferred = self.resolve_target_id(self.config["subdomain_destinations"].get(family, ""))
+            candidates = []
+            for anchor in anchors | ({domain} if site in targets else set()):
+                destination = self.resolve_target_id("site:" + anchor)
+                if domain_family(anchor) != family or destination not in targets or destination in ignored:
+                    continue
+                if mode == "smart" and anchor != domain and not self.site_identity_matches(domain, anchor):
+                    continue
+                key = "|".join(sorted((site, destination)))
+                if key in self.config["dismissed_suggestions"]:
+                    continue
+                candidates.append((destination != preferred, anchor != family, anchor.count("."), anchor, destination))
+            if not candidates:
+                continue
+            destination = min(candidates)[-1]
+            if destination == site:
+                continue
+            self.store.merge_target(site, destination)
+            targets.pop(site, None)
+            for alias in members:
+                self.config["service_links"][alias] = destination
+            self.config["service_links"][site] = destination
+            self.config["review_targets"] = [value for value in self.config["review_targets"] if value != site]
+            changed = True
+        if changed:
+            save_config(self.config)
+
     def reconcile_targets(self, extra_app_ids: set[str] | None = None) -> None:
         """Fold linked app settings and usage into one service target."""
         history_ids = self.store.target_ids()
@@ -545,7 +696,10 @@ class Runtime:
         app_ids.update(target_id for target_id in self.config["ignored_targets"] if target_id.startswith("app:"))
         app_ids.update(target_id for target_id in history_ids if target_id.startswith("app:"))
         app_ids.update(extra_app_ids or set())
-        app_ids.update(self.config["service_links"])
+        self.link_sites({site[5:] for app_id in (extra_app_ids or set())
+                             if app_id not in self.config["independent_targets"]
+                             for site in [service_site_for_app(app_id[4:])] if site})
+        app_ids.update(key for key in self.config["service_links"] if key.startswith("app:"))
         changed = False
         ignored = set(self.config["ignored_targets"])
         for app_id in sorted(app_ids):
@@ -588,15 +742,40 @@ class Runtime:
                     for window in session_windows
                     if isinstance(window, dict) and window.get("id") is not None and window.get("state") != "minimized"
                 }
+                metadata = message.get("site_metadata", [])
+                if not isinstance(metadata, list):
+                    metadata = []
                 names_changed = False
-                for window in self.browser_windows.values():
+                for window in metadata + list(self.browser_windows.values()):
+                    if not isinstance(window, dict):
+                        continue
                     domain = canonical_domain(str(window.get("domain", "")))
                     name = " ".join(str(window.get("site_name", "")).split())[:120]
                     if domain and name and self.config["site_names"].get(domain) != name:
                         self.config["site_names"][domain] = name
                         names_changed = True
+                    identity = window.get("site_identity")
+                    if domain and isinstance(identity, dict):
+                        application = " ".join(str(identity.get("application_name", "")).split())[:120]
+                        manifest = str(identity.get("manifest", ""))[:2048]
+                        try:
+                            parsed = urllib.parse.urlsplit(manifest)
+                            manifest_host = canonical_domain(parsed.hostname or "")
+                            same_service = manifest_host and (manifest_host == domain or domain.endswith("." + manifest_host))
+                            if parsed.scheme in ("http", "https") and same_service and not parsed.username and not parsed.password:
+                                manifest = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+                            else:
+                                manifest = ""
+                        except ValueError:
+                            manifest = ""
+                        value = {"application_name": application, "manifest": manifest}
+                        if self.config["site_identity"].get(domain) != value:
+                            self.config["site_identity"][domain] = value
+                            names_changed = True
                 if names_changed:
                     save_config(self.config)
+                self.link_sites({canonical_domain(str(window.get("domain", "")))
+                                     for window in self.browser_windows.values() if window.get("domain")})
                 self.last_browser_snapshot = time.monotonic()
                 blocked = self.blocked_domains()
                 clients = visible_clients() if blocked else []
@@ -638,14 +817,19 @@ class Runtime:
                 source = self.resolve_target_id(str(message.get("source", "")))
                 destination = self.resolve_target_id(str(message.get("destination", "")))
                 targets = self.config["targets"]
-                if source == destination or source not in targets or destination not in targets:
-                    return {"ok": False, "error": "choose two different saved targets"}
+                known_source = (source in targets or source in self.store.target_ids()
+                                or source in self.config["review_targets"])
+                if source == destination or destination not in targets or not known_source:
+                    return {"ok": False, "error": "choose a known entry and a different saved destination"}
+                if source not in targets:
+                    self.store.classify_pending(source, targets[destination].get("category", "neutral"))
                 self.store.merge_target(source, destination)
-                targets.pop(source)
+                targets.pop(source, None)
                 for alias in list(self.config["service_links"]):
                     if self.resolve_target_id(alias) == source:
                         self.config["service_links"][alias] = destination
                 self.config["service_links"][source] = destination
+                self.config["review_targets"] = [value for value in self.config["review_targets"] if value != source]
                 self.config["link_schema"] = 2
                 self.config["ignored_targets"] = [value for value in self.config["ignored_targets"]
                                                   if value not in (source, destination)]
@@ -663,9 +847,25 @@ class Runtime:
                     target["name"] = str(message["name"])
                 target["category"] = category
                 target.setdefault("quota_minutes", int(self.config["default_quota_minutes"]))
+                self.config["review_targets"] = [value for value in self.config["review_targets"] if value != target_id]
                 self.store.classify_pending(target_id, category)
                 if target_id.startswith("site:"):
                     self.reconcile_targets()
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_subdomain_rule":
+                domain = canonical_domain(str(message.get("domain", "")))
+                mode = str(message.get("mode", ""))
+                target = self.resolve_target_id("site:" + domain)
+                if not domain or target not in self.config["targets"] or mode not in ("smart", "group", "separate"):
+                    return {"ok": False, "error": "invalid domain or subdomain mode"}
+                members = {target} | {alias for alias in self.config["service_links"] if self.resolve_target_id(alias) == target}
+                families = {domain_family(member[5:]) for member in members if member.startswith("site:")}
+                families.add(domain_family(domain))
+                for family in families - {""}:
+                    self.config["subdomain_rules"][family] = mode
+                    self.config["subdomain_destinations"][family] = target
+                self.reconcile_targets()
                 save_config(self.config)
                 return {"ok": True}
             if op == "pause":
@@ -680,6 +880,26 @@ class Runtime:
                 elif self.paused and duration != "manual":
                     self.pause_until = now.timestamp() + int(duration) * 60
                 self.config["pause_state"] = {"active": self.paused, "until": self.pause_until}
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_excluded_entry_visibility":
+                target_id = self.resolve_target_id(str(message.get("target_id", "")))
+                hidden = message.get("hidden")
+                if target_id not in self.config["ignored_targets"] or not isinstance(hidden, bool):
+                    return {"ok": False, "error": "choose an excluded entry and a boolean visibility"}
+                targets = set(self.config["hidden_excluded_targets"])
+                if hidden:
+                    targets.add(target_id)
+                else:
+                    targets.discard(target_id)
+                self.config["hidden_excluded_targets"] = sorted(targets)
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_excluded_visibility":
+                hidden = message.get("hidden")
+                if not isinstance(hidden, bool):
+                    return {"ok": False, "error": "hidden must be a boolean"}
+                self.config["hide_excluded"] = hidden
                 save_config(self.config)
                 return {"ok": True}
             if op == "set_warning":
@@ -736,17 +956,25 @@ class Runtime:
                 return {"ok": True}
             if op == "exclude":
                 target_id = self.resolve_target_id(str(message.get("target_id", "")))
-                if not target_id.startswith(("app:", "site:")) or target_id in self.config["targets"]:
-                    return {"ok": False, "error": "only unclassified apps or sites can be excluded"}
+                if not target_id.startswith(("app:", "site:")) or not target_id.split(":", 1)[1]:
+                    return {"ok": False, "error": "invalid app or site"}
                 ignored = set(self.config["ignored_targets"])
                 ignored.add(target_id)
+                self.config["review_targets"] = [value for value in self.config["review_targets"] if value != target_id]
                 self.config["ignored_targets"] = sorted(ignored)
-                self.store.forget_unclassified(target_id)
+                if target_id not in self.config["targets"]:
+                    self.store.forget_unclassified(target_id)
                 save_config(self.config)
                 return {"ok": True}
             if op == "unexclude":
                 target_id = self.resolve_target_id(str(message.get("target_id", "")))
+                if not target_id.startswith(("app:", "site:")) or not target_id.split(":", 1)[1]:
+                    return {"ok": False, "error": "invalid app or site"}
+                if target_id not in self.config["targets"]:
+                    self.config["review_targets"] = sorted(set(self.config["review_targets"]) | {target_id})
+                self.config["hidden_excluded_targets"] = [value for value in self.config["hidden_excluded_targets"] if value != target_id]
                 self.config["ignored_targets"] = [value for value in self.config["ignored_targets"] if value != target_id]
+                self.reconcile_targets()
                 save_config(self.config)
                 return {"ok": True}
             if op == "set_quota":
@@ -790,6 +1018,8 @@ class Runtime:
         site_ids.update(key for key in self.config["service_links"] if key.startswith("site:"))
         for site_id in sorted(site_ids):
             target_id = self.resolve_target_id(site_id)
+            if target_id in self.config["ignored_targets"]:
+                continue
             target = self.config["targets"].get(target_id, {})
             if target.get("category") == "consumption" and target.get("limit_action", "close") == "close":
                 quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
@@ -846,6 +1076,7 @@ class Runtime:
             browser_active = time.monotonic() - self.last_browser_snapshot <= 3
             browser_windows = list(self.browser_windows.values()) if browser_active else []
         locked, idle = session_status()
+        browser_running = browser_is_running()
         in_schedule = in_work_hours(now, schedule) and not locked and not idle and not paused
         app_clients = visible_clients() if in_schedule else []
         focused_address = focused_window_address() if in_schedule else ""
@@ -855,6 +1086,12 @@ class Runtime:
 
         windows_to_close: list[dict[str, Any]] = []
         with self.lock:
+            if not browser_running:
+                self.browser_opened_at = None
+            elif self.browser_opened_at is None:
+                self.browser_opened_at = time.monotonic()
+            browser_connection_expected = (browser_running and self.browser_opened_at is not None
+                                           and time.monotonic() - self.browser_opened_at >= 8)
             in_schedule = in_schedule and not self.paused
             if not in_schedule:
                 visible = []
@@ -960,8 +1197,8 @@ class Runtime:
                     "configured": True,
                     "focused": False,
                 })
-            for target_id in self.store.pending_targets():
-                if target_id in seen or target_id in targets or target_id in ignored_targets:
+            for target_id in sorted(set(self.store.pending_targets()) | set(self.config["review_targets"])):
+                if target_id in seen or target_id in targets or target_id in ignored_targets or self.resolve_target_id(target_id) != target_id:
                     continue
                 name = target_display_name(target_id)
                 rows.append({
@@ -981,12 +1218,20 @@ class Runtime:
                 row["members"] = sorted({row["id"]} | {alias for alias in self.config["service_links"]
                                                        if self.resolve_target_id(alias) == row["id"]})
                 row["linked"] = len(row["members"]) > 1
+                families = sorted({domain_family(member[5:]) for member in row["members"] if member.startswith("site:")} - {""})
+                row["grouping_scopes"] = families
+                row["grouping_scope"] = domain_family(row["id"][5:]) if row["id"].startswith("site:") else (families[0] if families else "")
             history = self.store.history(30)
             today = dict(history[-1]) if history and history[-1]["day"] == day else {"day": day}
             self.latest_state = {
                 "updated_at": now.isoformat(timespec="seconds"),
                 "diagnostics": {"browser_connected": browser_active,
+                                "browser_running": browser_running,
+                                "browser_connection_expected": browser_connection_expected,
                                 "browser_windows": len(browser_windows),
+                                "browser_can_close_tabs": all(
+                                    window.get("tab_id") is not None for window in browser_windows
+                                ) if browser_windows else None,
                                 "matched_sites": len(site_clients)},
                 "working": in_schedule,
                 "paused": self.paused,
@@ -994,10 +1239,13 @@ class Runtime:
                 "warn_before_limit": self.config["warn_before_limit"],
                 "weekly": self.weekly_summary(history, now.date()),
                 "suggestions": self.group_suggestions(rows),
+                "subdomain_rules": self.config["subdomain_rules"],
                 "data_action": self.last_data_action,
                 "idle": idle,
                 "schedule": self.config["schedule"],
                 "ignored_targets": self.config["ignored_targets"],
+                "hide_excluded": self.config["hide_excluded"],
+                "hidden_excluded_targets": self.config["hidden_excluded_targets"],
                 "focused_id": next((row["id"] for row in rows if row["focused"] and row["id"].startswith("site:")),
                                    next((row["id"] for row in rows if row["focused"]), "")),
                 "tracked": rows,
@@ -1095,7 +1343,8 @@ def native_host() -> None:
             request = json.loads(payload.decode("utf-8"))
             response = request_agent({"op": "get_state"} if request.get("op") == "status" else
                                      {"op": "browser_snapshot", "windows": request.get("windows", []),
-                                      "browser_id": request.get("browser_id", "default")})
+                                      "browser_id": request.get("browser_id", "default"),
+                                      "site_metadata": request.get("site_metadata", [])})
             if request.get("op") == "status":
                 response = {"ok": bool(response.get("ok"))}
             encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
@@ -1109,7 +1358,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Focus local tracking service")
     parser.add_argument("--daemon", action="store_true", help="run the local tracker")
     parser.add_argument("--native-host", action="store_true", help="run the Chromium native messaging bridge")
-    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history"])
+    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "excluded-visibility", "excluded-entry-visibility"])
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
     ensure_dirs()
@@ -1129,6 +1378,8 @@ def main() -> int:
             response = request_agent({"op": "set_quota", "target_id": args.arguments[0], "quota_minutes": args.arguments[1]})
         elif args.operation == "limit-action" and len(args.arguments) == 2:
             response = request_agent({"op": "set_limit_action", "target_id": args.arguments[0], "action": args.arguments[1]})
+        elif args.operation == "subdomains" and len(args.arguments) == 2:
+            response = request_agent({"op": "set_subdomain_rule", "domain": args.arguments[0], "mode": args.arguments[1]})
         elif args.operation == "unlink" and len(args.arguments) == 1:
             response = request_agent({"op": "unlink", "target_id": args.arguments[0]})
         elif args.operation == "merge" and len(args.arguments) == 2:
@@ -1141,6 +1392,10 @@ def main() -> int:
                 raise ValueError("invalid pause duration")
             response = request_agent({"op": "pause", "paused": value != "off",
                                       "duration": value if value in {"15", "60", "tomorrow"} else "manual"})
+        elif args.operation == "excluded-entry-visibility" and len(args.arguments) == 2 and args.arguments[1] in ("show", "hide"):
+            response = request_agent({"op": "set_excluded_entry_visibility", "target_id": args.arguments[0], "hidden": args.arguments[1] == "hide"})
+        elif args.operation == "excluded-visibility" and args.arguments in (["show"], ["hide"]):
+            response = request_agent({"op": "set_excluded_visibility", "hidden": args.arguments[0] == "hide"})
         elif args.operation == "warning" and len(args.arguments) == 1:
             response = request_agent({"op": "set_warning", "enabled": args.arguments[0] == "on"})
         elif args.operation == "dismiss-suggestion" and len(args.arguments) == 2:
