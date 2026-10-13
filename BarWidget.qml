@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Window
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -202,10 +201,9 @@ BarWidget {
       visible: root.visibleTargets.length === 0
       x: connectionIndicator.visible
         ? connectionIndicator.x + connectionIndicator.width + Style.space(5)
-        : Math.round((button.width - width) / 2)
-      // Snap to device pixels: logical rounding drifts a pixel at fractional scales.
-      y: Math.round((iconCenterY - height / 2) * Screen.devicePixelRatio) / Screen.devicePixelRatio
-      size: Math.round(Style.bar.iconFont * 0.9)
+        : (button.width - width) / 2
+      y: iconCenterY - height / 2
+      size: Style.bar.iconFont
       color: button.foreground
       accent: Color.accent
       session: root.focusUntil > root.statusNow
