@@ -36,6 +36,10 @@ LIMIT_ACTIONS = {"close", "notify", "keep_open"}
 IGNORED_APP_IDS: set[str] = set()
 DEFAULT_QUOTA_MINUTES = 10
 POLL_SECONDS = 1.0
+# Review only asks about apps and sites used for a while, not one-off visits.
+REVIEW_MIN_SECONDS = 600
+REVIEW_DAYS = 7
+STATE_HEARTBEAT_SECONDS = 10
 BROWSER_APP_IDS = {"chromium", "chromium-bin", "google-chrome", "google-chrome-stable", "chrome"}
 
 
@@ -115,8 +119,6 @@ def default_config() -> dict[str, Any]:
         "targets": {},
         "review_targets": [],
         "ignored_targets": [],
-        "hide_excluded": True,
-        "hidden_excluded_targets": [],
         "service_links": {},
         "site_names": {},
         "site_identity": {},
@@ -149,6 +151,8 @@ def load_config() -> dict[str, Any]:
         defaults["subdomain_rule_schema"] = 1
         for key, default in defaults.items():
             value.setdefault(key, default)
+        for retired in ("hide_excluded", "hidden_excluded_targets"):
+            value.pop(retired, None)
         return value
     except FileNotFoundError:
         value = default_config()
@@ -162,10 +166,10 @@ def load_config() -> dict[str, Any]:
         return value
 
 
-def atomic_json(path: pathlib.Path, value: Any) -> None:
+def atomic_json(path: pathlib.Path, value: Any, indent: int | None = 2) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=indent) + "\n", encoding="utf-8")
     os.chmod(temp, 0o600)
     temp.replace(path)
 
@@ -451,10 +455,12 @@ class Store:
         rows = self.db.execute("SELECT target_id, SUM(seconds) FROM daily_usage WHERE day=? GROUP BY target_id", (day,)).fetchall()
         return {target_id: float(seconds) for target_id, seconds in rows}
 
-    def pending_targets(self) -> list[str]:
-        start = (dt.date.today() - dt.timedelta(days=29)).isoformat()
-        rows = self.db.execute("SELECT DISTINCT target_id FROM daily_usage WHERE category='unclassified' AND day>=?", (start,)).fetchall()
-        return [str(row[0]) for row in rows]
+    def pending_targets(self, days: int = 30) -> dict[str, float]:
+        """Unclassified seconds per target over the last `days` days."""
+        start = (dt.date.today() - dt.timedelta(days=days - 1)).isoformat()
+        rows = self.db.execute("""SELECT target_id, SUM(seconds) FROM daily_usage
+            WHERE category='unclassified' AND day>=? GROUP BY target_id""", (start,)).fetchall()
+        return {str(target_id): float(seconds) for target_id, seconds in rows}
 
     def forget_unclassified(self, target_id: str) -> None:
         with self.db:
@@ -480,9 +486,9 @@ def public_suffix_context():
     return library, library.psl_builtin()
 
 
-@functools.lru_cache(maxsize=2048)
-def domain_family(domain: str) -> str:
-    """Return the registrable ICANN domain, including hosted sibling projects."""
+@functools.lru_cache(maxsize=4096)
+def registrable_domain(domain: str, suffix_type: int = 1) -> str:
+    """Return the registrable domain; type 1 uses ICANN suffixes, 3 adds hosting suffixes."""
     domain = canonical_domain(domain)
     if not domain:
         return ""
@@ -494,12 +500,19 @@ def domain_family(domain: str) -> str:
     library, context = public_suffix_context()
     labels = domain.split(".")
     for index in range(len(labels)):
-        suffix = ".".join(labels[index:])
-        # ICANN rules define the domain family. Private hosting boundaries
-        # must not prevent an explicitly selected Group from joining siblings.
-        if library.psl_is_public_suffix2(context, suffix.encode("utf-8"), 1):
+        if library.psl_is_public_suffix2(context, ".".join(labels[index:]).encode("utf-8"), suffix_type):
             return ".".join(labels[index - 1:]) if index else ""
     return domain
+
+
+def domain_family(domain: str) -> str:
+    """ICANN family: what an explicit Group rule covers, including hosted sibling projects."""
+    return registrable_domain(domain, 1)
+
+
+def site_root(domain: str) -> str:
+    """One site, honouring hosting boundaries (each *.pages.dev project is its own site)."""
+    return registrable_domain(domain, 3)
 
 
 class Runtime:
@@ -531,6 +544,8 @@ class Runtime:
         self.last_data_action: dict[str, Any] = {}
         self.notified_limits: set[tuple[str, str]] = set()
         self.latest_state: dict[str, Any] = {"tracked": [], "today": {}, "history": []}
+        self.written_state = ""
+        self.written_at = 0.0
 
     def resume_if_due(self, now: dt.datetime) -> None:
         if self.paused and self.pause_until and now.timestamp() >= self.pause_until:
@@ -556,48 +571,20 @@ class Runtime:
                 if current["recorded_days"] and previous["recorded_days"] else None}
 
     def group_suggestions(self, rows: list[dict]) -> list[dict]:
-        # Detachment prevents automatic linking, not suggestions for manual review.
+        """Same-name entries across domains (e.g. an app and its site); subdomains group automatically."""
         candidates = [row for row in rows if row["configured"]]
-
-        def domains(row: dict) -> set[str]:
-            found = set()
-            for member in set(row.get("members", [])) | {row["id"]}:
-                site = ""
-                if member.startswith("site:"):
-                    site = member
-                elif member.startswith("app:"):
-                    site = service_site_for_app(member[4:])
-                if site:
-                    found.add(canonical_domain(site[5:]))
-            return found
-
         suggestions = []
-        site_domains = {row["id"]: domains(row) for row in candidates}
         for index, source in enumerate(candidates):
             name = re.sub(r"[^\w]", "", source["name"].casefold())
+            if len(name) < 3:
+                continue
             for destination in candidates[index + 1:]:
                 key = "|".join(sorted((source["id"], destination["id"])))
-                if key in self.config["dismissed_suggestions"]:
-                    continue
-                related = []
-                for first in site_domains[source["id"]]:
-                    for second in site_domains[destination["id"]]:
-                        if first.endswith("." + second):
-                            related.append((first, second, source, destination))
-                        elif second.endswith("." + first):
-                            related.append((second, first, destination, source))
-                if related:
-                    # Keep the parent group's settings; prefer the closest parent.
-                    child, parent, child_row, parent_row = min(
-                        related, key=lambda item: (item[0].count(".") - item[1].count("."), item[0], item[1]))
-                    priority = 0 if child_row.get("category") == parent_row.get("category") else 1
-                    suggestions.append((priority, {"source": child_row["id"], "destination": parent_row["id"],
-                        "name": parent, "reason": "Subdomain", "source_domain": child, "destination_domain": parent}))
-                elif len(name) >= 3 and name == re.sub(r"[^\w]", "", destination["name"].casefold()):
-                    suggestions.append((2, {"source": source["id"], "destination": destination["id"],
-                                        "name": source["name"], "reason": "Matching names"}))
-        suggestions.sort(key=lambda item: (item[0], item[1]["destination"], item[1]["source"]))
-        return [suggestion for _, suggestion in suggestions[:8]]
+                if key not in self.config["dismissed_suggestions"] and name == re.sub(
+                        r"[^\w]", "", destination["name"].casefold()):
+                    suggestions.append({"source": source["id"], "destination": destination["id"],
+                                        "name": source["name"], "reason": "Matching names"})
+        return suggestions[:8]
 
     def resolve_target_id(self, target_id: str) -> str:
         visited = set()
@@ -637,15 +624,31 @@ class Runtime:
         return bool((application and application == other_application)
                     or (first.get("manifest") and first.get("manifest") == second.get("manifest")))
 
+    def distinct_service(self, domain: str, anchor: str) -> bool:
+        """Evidence that a subdomain is its own service: own web app or declared name."""
+        identities = self.config["site_identity"]
+        first, second = identities.get(domain, {}), identities.get(anchor)
+        application = first.get("application_name", "").casefold()
+        if second is None:
+            return bool(first.get("manifest") or application)
+        # A name only the subdomain declares marks its own app; a parent-only name does not.
+        return ((bool(application) and application != second.get("application_name", "").casefold())
+                or first.get("manifest", "") != second.get("manifest", ""))
+
     def link_sites(self, domains: set[str]) -> None:
-        """Group sibling sites within a domain family; Smart requires shared identity."""
+        """Fold subdomains into their site unless they show signs of a distinct service.
+
+        Smart: same site merges by default; sibling projects on a hosting
+        domain need a shared identity. Group: the whole family merges.
+        """
         targets = self.config["targets"]
         known = set(targets) | self.store.target_ids() | set(self.config["review_targets"])
         ignored = set(self.config["ignored_targets"])
         independent = set(self.config["independent_targets"])
+        identities = self.config["site_identity"]
         anchors = {key[5:] for key in set(targets) | set(self.config["service_links"])
                    if key.startswith("site:") and self.resolve_target_id(key) in targets}
-        domains = set(domains) | set(self.config["site_identity"]) | {key[5:] for key in known if key.startswith("site:")}
+        domains = set(domains) | set(identities) | {key[5:] for key in known if key.startswith("site:")}
         domains.update(site[5:] for app in known if app.startswith("app:")
                        for site in [service_site_for_app(app[4:])] if site)
         changed = False
@@ -662,21 +665,39 @@ class Runtime:
             members = {alias for alias in self.config["service_links"] if self.resolve_target_id(alias) == site}
             if members & (ignored | independent):
                 continue
+            # Smart waits for the page's identity so a distinct web app is never folded in blindly.
+            if mode == "smart" and domain not in identities:
+                continue
+            root = site_root(domain)
+            own = targets.get(site)
             preferred = self.resolve_target_id(self.config["subdomain_destinations"].get(family, ""))
             candidates = []
-            for anchor in anchors | ({domain} if site in targets else set()):
+            for anchor in anchors | ({domain} if own else set()):
                 destination = self.resolve_target_id("site:" + anchor)
                 if domain_family(anchor) != family or destination not in targets or destination in ignored:
                     continue
-                if mode == "smart" and anchor != domain and not self.site_identity_matches(domain, anchor):
+                if anchor != domain and mode == "smart":
+                    if site_root(anchor) == root:
+                        if self.distinct_service(domain, anchor) or (
+                                own and own.get("category") != targets[destination].get("category")):
+                            continue
+                    elif not self.site_identity_matches(domain, anchor):
+                        continue
+                if "|".join(sorted((site, destination))) in self.config["dismissed_suggestions"]:
                     continue
-                key = "|".join(sorted((site, destination)))
-                if key in self.config["dismissed_suggestions"]:
+                candidates.append((destination != preferred, site_root(anchor) != root,
+                                   anchor != family, anchor.count("."), anchor, destination))
+            if candidates:
+                destination = min(candidates)[-1]
+            else:
+                # No saved entry yet: gather pending subdomains under one entry for Review.
+                scope = family if mode == "group" else root
+                destination = "site:" + scope
+                if (own or not scope or scope == domain or destination in ignored
+                        or self.resolve_target_id(destination) != destination
+                        or (mode == "smart" and self.distinct_service(domain, scope))
+                        or "|".join(sorted((site, destination))) in self.config["dismissed_suggestions"]):
                     continue
-                candidates.append((destination != preferred, anchor != family, anchor.count("."), anchor, destination))
-            if not candidates:
-                continue
-            destination = min(candidates)[-1]
             if destination == site:
                 continue
             self.store.merge_target(site, destination)
@@ -882,26 +903,6 @@ class Runtime:
                 self.config["pause_state"] = {"active": self.paused, "until": self.pause_until}
                 save_config(self.config)
                 return {"ok": True}
-            if op == "set_excluded_entry_visibility":
-                target_id = self.resolve_target_id(str(message.get("target_id", "")))
-                hidden = message.get("hidden")
-                if target_id not in self.config["ignored_targets"] or not isinstance(hidden, bool):
-                    return {"ok": False, "error": "choose an excluded entry and a boolean visibility"}
-                targets = set(self.config["hidden_excluded_targets"])
-                if hidden:
-                    targets.add(target_id)
-                else:
-                    targets.discard(target_id)
-                self.config["hidden_excluded_targets"] = sorted(targets)
-                save_config(self.config)
-                return {"ok": True}
-            if op == "set_excluded_visibility":
-                hidden = message.get("hidden")
-                if not isinstance(hidden, bool):
-                    return {"ok": False, "error": "hidden must be a boolean"}
-                self.config["hide_excluded"] = hidden
-                save_config(self.config)
-                return {"ok": True}
             if op == "set_warning":
                 self.config["warn_before_limit"] = bool(message.get("enabled"))
                 save_config(self.config)
@@ -972,7 +973,6 @@ class Runtime:
                     return {"ok": False, "error": "invalid app or site"}
                 if target_id not in self.config["targets"]:
                     self.config["review_targets"] = sorted(set(self.config["review_targets"]) | {target_id})
-                self.config["hidden_excluded_targets"] = [value for value in self.config["hidden_excluded_targets"] if value != target_id]
                 self.config["ignored_targets"] = [value for value in self.config["ignored_targets"] if value != target_id]
                 self.reconcile_targets()
                 save_config(self.config)
@@ -1197,8 +1197,12 @@ class Runtime:
                     "configured": True,
                     "focused": False,
                 })
-            for target_id in sorted(set(self.store.pending_targets()) | set(self.config["review_targets"])):
+            pending = self.store.pending_targets(REVIEW_DAYS)
+            review_targets = set(self.config["review_targets"])
+            for target_id in sorted(set(pending) | review_targets):
                 if target_id in seen or target_id in targets or target_id in ignored_targets or self.resolve_target_id(target_id) != target_id:
+                    continue
+                if pending.get(target_id, 0) < REVIEW_MIN_SECONDS and target_id not in review_targets:
                     continue
                 name = target_display_name(target_id)
                 rows.append({
@@ -1215,13 +1219,15 @@ class Runtime:
             usage_today = self.store.target_today(day)
             for row in rows:
                 row["today_seconds"] = int(usage_today.get(row["id"], 0))
+                row["review"] = not row["configured"] and (
+                    pending.get(row["id"], 0) >= REVIEW_MIN_SECONDS or row["id"] in review_targets)
                 row["members"] = sorted({row["id"]} | {alias for alias in self.config["service_links"]
                                                        if self.resolve_target_id(alias) == row["id"]})
                 row["linked"] = len(row["members"]) > 1
                 families = sorted({domain_family(member[5:]) for member in row["members"] if member.startswith("site:")} - {""})
                 row["grouping_scopes"] = families
                 row["grouping_scope"] = domain_family(row["id"][5:]) if row["id"].startswith("site:") else (families[0] if families else "")
-            history = self.store.history(30)
+            history = self.store.history(14)
             today = dict(history[-1]) if history and history[-1]["day"] == day else {"day": day}
             self.latest_state = {
                 "updated_at": now.isoformat(timespec="seconds"),
@@ -1244,15 +1250,17 @@ class Runtime:
                 "idle": idle,
                 "schedule": self.config["schedule"],
                 "ignored_targets": self.config["ignored_targets"],
-                "hide_excluded": self.config["hide_excluded"],
-                "hidden_excluded_targets": self.config["hidden_excluded_targets"],
                 "focused_id": next((row["id"] for row in rows if row["focused"] and row["id"].startswith("site:")),
                                    next((row["id"] for row in rows if row["focused"]), "")),
                 "tracked": rows,
                 "today": today,
                 "history": history,
             }
-            atomic_json(STATE_PATH, self.latest_state)
+            # Skip unchanged writes; the heartbeat lets the widget detect a stopped service.
+            content = json.dumps({**self.latest_state, "updated_at": ""}, sort_keys=True)
+            if content != self.written_state or time.monotonic() - self.written_at >= STATE_HEARTBEAT_SECONDS:
+                atomic_json(STATE_PATH, self.latest_state, indent=None)
+                self.written_state, self.written_at = content, time.monotonic()
         if windows_to_close:
             self.close_app_windows(windows_to_close)
 
@@ -1358,7 +1366,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Focus local tracking service")
     parser.add_argument("--daemon", action="store_true", help="run the local tracker")
     parser.add_argument("--native-host", action="store_true", help="run the Chromium native messaging bridge")
-    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "excluded-visibility", "excluded-entry-visibility"])
+    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains"])
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
     ensure_dirs()
@@ -1392,10 +1400,6 @@ def main() -> int:
                 raise ValueError("invalid pause duration")
             response = request_agent({"op": "pause", "paused": value != "off",
                                       "duration": value if value in {"15", "60", "tomorrow"} else "manual"})
-        elif args.operation == "excluded-entry-visibility" and len(args.arguments) == 2 and args.arguments[1] in ("show", "hide"):
-            response = request_agent({"op": "set_excluded_entry_visibility", "target_id": args.arguments[0], "hidden": args.arguments[1] == "hide"})
-        elif args.operation == "excluded-visibility" and args.arguments in (["show"], ["hide"]):
-            response = request_agent({"op": "set_excluded_visibility", "hidden": args.arguments[0] == "hide"})
         elif args.operation == "warning" and len(args.arguments) == 1:
             response = request_agent({"op": "set_warning", "enabled": args.arguments[0] == "on"})
         elif args.operation == "dismiss-suggestion" and len(args.arguments) == 2:

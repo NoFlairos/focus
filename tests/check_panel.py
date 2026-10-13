@@ -22,7 +22,9 @@ def module(name, files):
  (d/'qmldir').write_text('\n'.join(lines))
 module('Quickshell',{'Quickshell':(True,'import QtQuick\nQtObject { function execDetached(args) {} function env(name) {return "";} }')})
 module('Quickshell.Io',{'FileView':(False,'''import QtQuick
-QtObject {property string path; property bool watchChanges; property bool printErrors; signal loaded(); signal fileChanged(); function reload() {} function text() {return "{}";} }''')})
+QtObject {property string path; property bool watchChanges; property bool printErrors; signal loaded(); signal fileChanged(); function reload() {} function text() {return "{}";} }'''),
+'Process':(False,'''import QtQuick
+QtObject {property var command: []; property bool running: false; signal exited(int exitCode)}''')})
 module('qs.Commons',{
 'Style':(True,'''import QtQuick
 QtObject { property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
@@ -61,6 +63,7 @@ Item {
  weekly:{current:{screen_seconds:600,recorded_days:1,productive:5,neutral:2,consumption:3},previous:{screen_seconds:500,recorded_days:1},screen_delta:100},
  suggestions:[{source:"site:one.example",destination:"app:two",name:"Same name",reason:"Matching names"}]})
  property string agentPath: "unused"
+ property bool serviceConnected: true
  function appLabel(row) {return row.name;}
  }
  FocusPanel {id: focusPanel; anchors.fill:parent; widget:widget; page:"manage"}
@@ -89,7 +92,7 @@ Item {
  compare(focusBar.panelItem.manageSection, "diagnostics")
  focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_running:true,browser_connected:true,browser_can_close_tabs:false}})
  compare(focusBar.connectionIssue, "Reload extension")
- focusBar.snapshot = Object.assign({}, online, {updated_at:new Date(now - 6000).toISOString()})
+ focusBar.snapshot = Object.assign({}, online, {updated_at:new Date(now - 25000).toISOString()})
  compare(focusBar.connectionIssue, "Service offline")
  focusBar.snapshot = online
  compare(focusBar.connectionIssue, "")
@@ -98,7 +101,7 @@ Item {
  function test_untrusted_labels_stay_literal() {
  var markup = '<img src="http://127.0.0.1:PROBE_PORT/label.png"><b>Untrusted site</b>'
  focusBar.snapshot = {working:true, tracked:[{id:"site:untrusted.example",name:markup,visible_windows:1,category:"neutral"}]}
- focusPanel.page="manage"; focusPanel.manageSection="groups"
+ focusPanel.page="manage"; focusPanel.manageSection="apps"
  widget.snapshot = Object.assign({}, widget.snapshot, {suggestions:[{source:"site:one.example",destination:"app:two",name:markup,reason:"Matching names"}]})
  wait(200)
  var barLabel = findChild(focusBar, "barTargetLabel")
@@ -107,7 +110,7 @@ Item {
  compare(barLabel.textFormat, Text.PlainText)
  var suggestion = findChild(focusPanel, "suggestionLabel")
  verify(suggestion !== null)
- compare(suggestion.text, markup + " · Matching names")
+ compare(suggestion.text, markup)
  compare(suggestion.textFormat, Text.PlainText)
  wait(300)
  focusBar.snapshot = {tracked:[]}
@@ -117,71 +120,24 @@ Item {
  name: "ManagePanel"; when:windowShown
  function test_excluded_privacy() {
  var previous = widget.snapshot
- widget.snapshot = Object.assign({}, previous, {ignored_targets:["site:private.example", "app:private"], hide_excluded:true})
+ widget.snapshot = Object.assign({}, previous, {ignored_targets:["site:private.example", "app:private"]})
  focusPanel.manageSection="apps"
  wait(30)
- var toggle = findChild(focusPanel, "excludedVisibilityButton")
+ var toggle = findChild(focusPanel, "excludedToggle")
  verify(toggle !== null)
  verify(toggle.visible)
- compare(toggle.text, "Show")
- compare(focusPanel.filteredIgnored.length, 0)
+ compare(toggle.text, "Excluded · 2")
  compare(findChild(focusPanel, "excludedEntry"), null)
  toggle.clicked()
- compare(focusPanel.commandQueue[0][0], "excluded-visibility")
- compare(focusPanel.commandQueue[0][1], "show")
  wait(30)
- compare(toggle.text, "Hide")
- compare(focusPanel.filteredIgnored.length, 2)
  verify(findChild(focusPanel, "excludedEntry") !== null)
- widget.snapshot = Object.assign({}, widget.snapshot, {hide_excluded:false})
- compare(focusPanel.pendingHideExcluded, null)
- focusPanel.commandQueue=[]
- toggle.clicked()
- compare(focusPanel.commandQueue[0][1], "hide")
- wait(30)
- compare(focusPanel.filteredIgnored.length, 0)
- compare(findChild(focusPanel, "excludedEntry"), null)
- widget.snapshot = Object.assign({}, widget.snapshot, {hide_excluded:true})
- compare(focusPanel.pendingHideExcluded, null)
- widget.snapshot = previous
- focusPanel.commandQueue=[]
- focusPanel.manageSection=""
- }
- function test_individual_excluded_privacy() {
- var previous = widget.snapshot
- widget.snapshot = Object.assign({}, previous, {ignored_targets:["site:private.example", "app:private"], hide_excluded:false, hidden_excluded_targets:[]})
- focusPanel.manageSection="apps"
- wait(30)
- compare(focusPanel.filteredIgnored.length, 2)
- var hide = findChild(focusPanel, "hideExcludedEntryButton")
- verify(hide !== null)
- compare(hide.text, "Hide")
- hide.clicked()
- compare(focusPanel.commandQueue[0][0], "excluded-entry-visibility")
- compare(focusPanel.commandQueue[0][1], "site:private.example")
- compare(focusPanel.commandQueue[0][2], "hide")
- wait(30)
+ focusPanel.appSearch = "private.example"
  compare(focusPanel.filteredIgnored.length, 1)
- compare(focusPanel.filteredIgnored[0], "app:private")
- widget.snapshot = Object.assign({}, widget.snapshot, {hidden_excluded_targets:["site:private.example"]})
- compare(Object.keys(focusPanel.pendingHiddenEntries).length, 0)
- focusPanel.commandQueue=[]
- var reveal = findChild(focusPanel, "revealHiddenExcludedButton")
- verify(reveal.visible)
- reveal.clicked()
- wait(30)
- compare(focusPanel.filteredIgnored.length, 2)
- var unhide = findChild(focusPanel, "hideExcludedEntryButton")
- compare(unhide.text, "Unhide")
- unhide.clicked()
- compare(focusPanel.commandQueue[0][2], "show")
- widget.snapshot = Object.assign({}, widget.snapshot, {hidden_excluded_targets:[]})
- compare(Object.keys(focusPanel.pendingHiddenEntries).length, 0)
+ focusPanel.appSearch = ""
  focusPanel.opened=false
- verify(!focusPanel.revealHiddenExcluded)
+ verify(!focusPanel.excludedOpen)
  focusPanel.opened=true
- widget.snapshot=previous
- focusPanel.commandQueue=[]
+ widget.snapshot = previous
  focusPanel.manageSection=""
  }
  function test_single_subdomain_control_and_scroll_to_top() {
@@ -218,10 +174,15 @@ Item {
  // Pending entries are offered as a source; only saved entries can supply settings.
  var pending = {id:"site:other.host.example",name:"New site",category:"unclassified",configured:false,members:["site:other.host.example"]}
  widget.snapshot=Object.assign({}, widget.snapshot,{tracked:[group,pending]})
- focusPanel.refreshMergeChoices()
- compare(focusPanel.mergeChoices.length,2)
- compare(focusPanel.mergeDestinations.length,1)
- compare(focusPanel.mergeDestinations[0].id,group.id)
+ pending.review = true
+ widget.snapshot=Object.assign({}, widget.snapshot,{tracked:[group,pending]})
+ focusPanel.page="review"; focusPanel.expandedCardId=pending.id; wait(30)
+ compare(focusPanel.reviewCount,1)
+ var picker=findChild(focusPanel,"mergePicker")
+ verify(picker!==null)
+ compare(picker.options.length,1)
+ compare(picker.options[0].value,group.id)
+ focusPanel.expandedCardId=""; focusPanel.page="manage"
  widget.snapshot=previous
  focusPanel.commandQueue=[]
  focusPanel.manageSection=""
@@ -229,6 +190,8 @@ Item {
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
+ compare(findChild(focusPanel, "subdomainGroupButton"), null)
+ focusPanel.expandedCardId="site:one.example"; wait(30)
  var subdomains = findChild(focusPanel, "subdomainGroupButton")
  verify(subdomains !== null)
  verify(subdomains.visible)
@@ -266,18 +229,14 @@ Item {
  widget.snapshot = Object.assign({}, widget.snapshot, {warn_before_limit:true})
  compare(focusPanel.pendingWarning, null)
  focusPanel.commandQueue=[]
- focusPanel.manageSection="groups"; focusPanel.expandedGroupId="site:one.example"; focusPanel.refreshMergeChoices(); wait(30)
- compare(focusPanel.mergeChoices.length, 2)
- verify(focusPanel.serviceConnected)
- var source = findChild(focusPanel, "mergeSource")
- compare(source.options.length, 2)
- compare(source.options[0].label, "One")
- compare(source.options[0].description, "one.example")
- source.value = "app:two"
- compare(source.currentIndex, 1)
- focusPanel.refreshMergeChoices()
- compare(source.value, "")
- compare(source.currentIndex, -1)
+ var picker = findChild(focusPanel, "mergePicker")
+ verify(picker !== null)
+ compare(picker.options.length, 1)
+ compare(picker.options[0].label, "Two")
+ picker.value = "app:two"
+ compare(picker.currentIndex, 0)
+ focusPanel.expandedCardId=""
+ focusPanel.pendingExcluded=[]
 
  focusPanel.manageSection="diagnostics"; wait(30)
  focusPanel.manageSection="data"; focusPanel.confirmClearHistory=true; wait(30)

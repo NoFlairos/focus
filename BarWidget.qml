@@ -16,10 +16,12 @@ BarWidget {
   readonly property string agentPath: dataHome + "/focus-ratio/focus_ratio_agent.py"
   readonly property string statePath: stateHome + "/focus-ratio/state.json"
   property var snapshot: ({ tracked: [], today: ({}), history: [] })
+  property string snapshotText: ""
   property double statusNow: Date.now()
+  // The agent rewrites state on change and at least every 10 s.
   readonly property bool serviceConnected: {
     var updated = Date.parse(String(snapshot.updated_at || ""))
-    return isFinite(updated) && Math.abs(statusNow - updated) < 5000
+    return isFinite(updated) && Math.abs(statusNow - updated) < 20000
   }
   readonly property string connectionIssue: !serviceConnected ? "Service offline"
     : snapshot.diagnostics && snapshot.diagnostics.browser_running === true
@@ -49,9 +51,14 @@ BarWidget {
   }
 
   function loadSnapshot(raw) {
+    raw = String(raw || "{}")
+    if (raw === snapshotText) return
     try {
-      var next = JSON.parse(String(raw || "{}"))
-      if (next && typeof next === "object") snapshot = next
+      var next = JSON.parse(raw)
+      if (next && typeof next === "object") {
+        snapshot = next
+        snapshotText = raw
+      }
     } catch (error) {
       // Keep the last good state during a transient file reload.
     }
@@ -195,9 +202,11 @@ BarWidget {
         spacing: Style.space(5)
 
         Repeater {
-          model: root.visibleTargets
+          // Count model keeps chips alive across refreshes; data follows by index.
+          model: root.visibleTargets.length
           delegate: Rectangle {
-            required property var modelData
+            required property int index
+            readonly property var modelData: root.visibleTargets[index] || ({})
             readonly property bool focused: modelData.id === root.snapshot.focused_id
             implicitWidth: targetRow.implicitWidth + Style.space(10)
             height: Style.space(25)

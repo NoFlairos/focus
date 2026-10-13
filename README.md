@@ -44,36 +44,37 @@ Paths follow your XDG settings when configured.
 
 ## Use
 
-- **Now:** visible apps and sites. **Review:** classify or exclude new entries.
-- **Manage:** schedule, groups, quotas, warnings, diagnostics and exports.
-- **History:** the last seven days. **Pause:** stop tracking and limit enforcement.
+- **Now:** visible apps and sites. **Review:** classify or exclude entries used
+  for at least 10 minutes over the last 7 days.
+- **History:** the last seven days. **Manage:** schedule (saved automatically),
+  apps & sites, diagnostics and exports. **Pause:** stop tracking and limits.
 
 Defaults: weekdays 08:00–17:00, 10 minutes/hour for Consumption. Limits reset
 at each clock hour. The default limit action **closes the window or active tab**;
-choose Notify or Keep open in Manage if preferred.
+choose Notify or Keep open under **More** on the entry.
 
 Screen time counts simultaneous activity once. Per-app totals can therefore
 exceed screen time. Tracking stops while paused, idle, locked or outside the schedule.
 Mapped windows can count even when covered; background tabs do not count, and
 ambiguous browser titles are skipped.
 
-Groups share settings and one counter. Merging adds existing history, which cannot
-be split afterward. Detach starts an independent counter with the same settings.
-Explicit web-app domains link automatically. Domains has three modes:
+Linked entries share settings and one counter. Merging adds existing history,
+which cannot be split afterward. Detach starts an independent counter with the
+same settings. Each entry's **More** holds its subdomain mode, members, Merge into
+and Exclude. Subdomains have three modes:
 
-- **Smart:** automatically group sites with the same declared application or manifest.
-- **Group:** automatically join all sites in the displayed domain family.
-- **Separate:** keep new sites independent; existing groups remain linked.
+- **Smart** (default): subdomains of a site join it unless they declare their own
+  web-app manifest or application name, or you gave them another category.
+  Sibling projects on hosting domains (`*.pages.dev`) join only with a shared identity.
+- **Group:** join every site in the domain family, hosting projects included.
+- **Separate:** keep new sites independent; existing links remain.
 
-Domain families use system libpsl ICANN data, so Group can also join hosted
-projects such as `*.pages.dev`. Detached, excluded and dismissed entries stay
-independent. Other matching services remain suggestions.
+Domain boundaries come from the system libpsl data. Detached, excluded and dismissed
+entries stay independent. Same-name entries across domains appear as suggestions.
 
 Classified entries can be excluded without losing their settings or history.
 Excluding an unclassified entry deletes its pending history. Track again restores
-the entry immediately, joining its group or returning it to Review.
-Excluded entries are hidden by default. Show / Hide remembers your choice;
-individual Hide and Show hidden control entries separately.
+the entry immediately. Excluded entries stay in a collapsed list.
 Use **↑ / ↓** to jump through long lists.
 
 ## Data and removal

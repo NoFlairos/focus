@@ -50,7 +50,8 @@ try {
  const evaluate = async expression => (await call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true})).result.value;
  const statusTab = await evaluate('chrome.tabs.getCurrent()');
  const activeTab = await evaluate('chrome.tabs.create({url:"http://127.0.0.1:8080",active:true})');
- const backgroundTab = await evaluate('chrome.tabs.create({url:"http://127.0.0.1:8080",active:false})');
+ // Index 0 keeps it away from the closing tab: Chromium activates a neighbour, which would then be limited too.
+ const backgroundTab = await evaluate('chrome.tabs.create({url:"http://127.0.0.1:8080",active:false,index:0})');
  for(let i=0;i<40;i++) {
    await delay(250);
    const state = JSON.parse(fs.readFileSync('/test/state/focus-ratio/state.json'));

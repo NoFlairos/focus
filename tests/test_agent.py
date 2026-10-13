@@ -283,41 +283,90 @@ class AgentTests(unittest.TestCase):
         self.assertIn("app:test", self.runtime.config["targets"])
         self.assertTrue(exported.exists())
 
-    def test_subdomain_suggestion_keeps_parent_settings_and_requires_confirmation(self):
-        parent, child = "site:example.co.uk", "site:app.example.co.uk"
-        for target, category in ((parent, "neutral"), (child, "productive")):
-            self.runtime.handle_message({"op": "classify", "target_id": target, "category": category})
+    def test_state_is_written_on_change_or_heartbeat_only(self):
+        self.clients = []
         self.runtime.tick(0)
-        suggestions = self.runtime.latest_state["suggestions"]
-        self.assertEqual(len(suggestions), 1)
-        suggestion = suggestions[0]
-        self.assertEqual(suggestion["source"], child)
-        self.assertEqual(suggestion["destination"], parent)
-        self.assertEqual(suggestion["reason"], "Subdomain")
-        self.assertEqual(suggestion["source_domain"], "app.example.co.uk")
-        self.assertIn(child, self.runtime.config["targets"])
-        self.assertEqual(self.runtime.resolve_target_id(child), child)
-        self.runtime.handle_message({"op": "dismiss_suggestion", **suggestion})
+        agent.STATE_PATH.unlink()
         self.runtime.tick(0)
-        self.assertEqual(self.runtime.latest_state["suggestions"], [])
+        self.assertFalse(agent.STATE_PATH.exists())
+        self.runtime.written_at -= agent.STATE_HEARTBEAT_SECONDS
+        self.runtime.tick(0)
+        self.assertTrue(agent.STATE_PATH.exists())
+        agent.STATE_PATH.unlink()
+        self.clients = [{"app_id": "Test", "window_title": "Test", "address": "0x123"}]
+        self.runtime.tick(1)
+        self.assertTrue(agent.STATE_PATH.exists())
 
-    def test_subdomain_suggestions_use_group_members_and_prioritize_same_category(self):
-        rows = [
-            {"id": "app:service", "name": "Service", "category": "neutral", "configured": True, "members": ["site:example.org"]},
-            {"id": "site:app.example.org", "name": "Workspace", "category": "neutral", "configured": True},
-            {"id": "site:video.example.org", "name": "Videos", "category": "consumption", "configured": True},
-            {"id": "site:notexample.org", "name": "Unrelated", "category": "neutral", "configured": True},
-            {"id": "site:example.org.unrelated.org", "name": "Other", "category": "neutral", "configured": True},
-        ]
-        suggestions = self.runtime.group_suggestions(rows)
-        self.assertEqual([s["source"] for s in suggestions], ["site:app.example.org", "site:video.example.org"])
-        self.assertTrue(all(s["destination"] == "app:service" for s in suggestions))
-        self.assertTrue(all(s["destination_domain"] == "example.org" for s in suggestions))
+    def test_review_waits_for_ten_minutes_over_seven_days(self):
+        now = dt.datetime.now().astimezone()
+        bucket = agent.current_hour_bucket(now)
+        self.clients = []
+        old = (now.date() - dt.timedelta(days=agent.REVIEW_DAYS)).isoformat()
+        self.runtime.store.add_times({"app:brief": "unclassified", "app:regular": "unclassified"}, 300, bucket, old)
+        for offset in range(2):
+            day = (now.date() - dt.timedelta(days=offset)).isoformat()
+            self.runtime.store.add_times({"app:regular": "unclassified", "app:brief": "unclassified"},
+                                         300 if offset else 299, bucket, day)
+        self.runtime.tick(0)
+        rows = {row["id"]: row for row in self.runtime.latest_state["tracked"]}
+        self.assertEqual(list(rows), [])
+        self.runtime.store.add_times({"app:regular": "unclassified"}, 1, bucket, now.date().isoformat())
+        self.runtime.tick(0)
+        rows = {row["id"]: row for row in self.runtime.latest_state["tracked"]}
+        self.assertEqual(list(rows), ["app:regular"])
+        self.assertTrue(rows["app:regular"]["review"])
 
-    def test_subdomain_suggestions_do_not_depend_on_short_site_names(self):
-        rows = [{"id": target, "name": "X", "configured": True, "category": "neutral"}
-                for target in ("site:console.example.org", "site:example.org")]
-        self.assertEqual(self.runtime.group_suggestions(rows)[0]["reason"], "Subdomain")
+    def test_smart_merges_same_site_unless_it_is_a_distinct_service(self):
+        parent = "site:example.org"
+        children = {"live": ("productive", {}), "music": ("neutral", {}),
+                    "studio": ("productive", {"manifest": "https://studio.example.org/app.json"}),
+                    "inbox": ("productive", {"application_name": "Inbox"})}
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        self.runtime.config["site_identity"] = {"example.org": {"application_name": "", "manifest": ""},
+                                                "docs.example.org": {"manifest": ""}}
+        for name, (category, identity) in children.items():
+            self.runtime.handle_message({"op": "classify", "target_id": "site:" + name + ".example.org", "category": category})
+            self.runtime.config["site_identity"][name + ".example.org"] = identity
+        self.runtime.link_sites(set())
+        resolved = {name: self.runtime.resolve_target_id("site:" + name + ".example.org") for name in (*children, "docs")}
+        self.assertEqual(resolved["live"], parent)
+        self.assertEqual(resolved["docs"], parent)
+        for name in ("music", "studio", "inbox"):
+            self.assertEqual(resolved[name], "site:" + name + ".example.org")
+        self.assertEqual(self.runtime.config["targets"][parent]["category"], "productive")
+        self.assertNotIn("site:live.example.org", self.runtime.config["targets"])
+
+    def test_smart_waits_for_identity_before_merging(self):
+        self.runtime.handle_message({"op": "classify", "target_id": "site:example.org", "category": "productive"})
+        self.runtime.link_sites({"new.example.org"})
+        self.assertEqual(self.runtime.resolve_target_id("site:new.example.org"), "site:new.example.org")
+        self.runtime.config["site_identity"]["new.example.org"] = {"manifest": "https://new.example.org/m.json"}
+        self.runtime.link_sites(set())
+        self.assertEqual(self.runtime.resolve_target_id("site:new.example.org"), "site:new.example.org")
+
+    def test_pending_subdomains_share_one_review_entry_and_threshold(self):
+        now = dt.datetime.now().astimezone()
+        bucket, day = agent.current_hour_bucket(now), now.date().isoformat()
+        self.clients = []
+        for name in ("cloud", "live"):
+            self.runtime.config["site_identity"][name + ".example.org"] = {"manifest": ""}
+            self.runtime.store.add_times({"site:" + name + ".example.org": "unclassified"}, 300, bucket, day)
+        self.runtime.config["site_identity"]["mail.example.org"] = {"manifest": "https://mail.example.org/m.json"}
+        self.runtime.store.add_times({"site:mail.example.org": "unclassified"}, 900, bucket, day)
+        self.runtime.tick(0)
+        rows = {row["id"]: row for row in self.runtime.latest_state["tracked"]}
+        self.assertEqual(sorted(rows), ["site:example.org", "site:mail.example.org"])
+        self.assertEqual(sorted(rows["site:example.org"]["members"]),
+                         ["site:cloud.example.org", "site:example.org", "site:live.example.org"])
+        self.runtime.handle_message({"op": "classify", "target_id": "site:example.org", "category": "productive"})
+        self.assertEqual(self.runtime.resolve_target_id("site:live.example.org"), "site:example.org")
+
+    def test_hosted_projects_need_matching_identity_under_smart(self):
+        self.runtime.handle_message({"op": "classify", "target_id": "site:one.pages.dev", "category": "productive"})
+        self.runtime.config["site_identity"].update({"one.pages.dev": {}, "two.pages.dev": {}})
+        self.runtime.link_sites(set())
+        self.assertEqual(self.runtime.resolve_target_id("site:two.pages.dev"), "site:two.pages.dev")
+        self.assertEqual(self.runtime.resolve_target_id("site:one.pages.dev"), "site:one.pages.dev")
 
     def test_smart_subdomains_require_application_identity_not_brand_name(self):
         parent = "site:example.org"
@@ -529,44 +578,6 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.store.history()[-1]["productive"], 0.5)
         self.assertNotIn(pending, self.runtime.store.pending_targets())
 
-    def test_excluded_entries_can_be_hidden_and_restored_individually(self):
-        first, second = "site:private.example", "site:other.example"
-        for target in (first, second):
-            self.runtime.handle_message({"op": "exclude", "target_id": target})
-        self.assertFalse(self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": "site:unknown.example", "hidden": True})["ok"])
-        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": True})["ok"])
-        self.runtime.store.db.close()
-        self.runtime = agent.Runtime()
-        self.runtime.tick(0)
-        self.assertEqual(self.runtime.latest_state["hidden_excluded_targets"], [first])
-        self.assertEqual(set(self.runtime.latest_state["ignored_targets"]), {first, second})
-        self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": False})
-        self.assertEqual(self.runtime.config["hidden_excluded_targets"], [])
-        self.runtime.handle_message({"op": "set_excluded_entry_visibility", "target_id": first, "hidden": True})
-        self.runtime.handle_message({"op": "unexclude", "target_id": first})
-        self.assertEqual(self.runtime.config["hidden_excluded_targets"], [])
-        self.assertEqual(self.runtime.config["ignored_targets"], [second])
-
-    def test_excluded_visibility_is_persistent_and_does_not_change_exclusions_or_history(self):
-        target = "site:private.example"
-        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
-        self.runtime.handle_message({"op": "exclude", "target_id": target})
-        now = dt.datetime.now().astimezone()
-        self.runtime.store.add_times({target: "consumption"}, 15, agent.current_hour_bucket(now), now.date().isoformat())
-        before = self.runtime.store.history()
-        self.runtime.tick(0)
-        self.assertTrue(self.runtime.latest_state["hide_excluded"])
-        self.assertFalse(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": "false"})["ok"])
-        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": False})["ok"])
-        self.runtime.store.db.close()
-        self.runtime = agent.Runtime()
-        self.runtime.tick(0)
-        self.assertFalse(self.runtime.latest_state["hide_excluded"])
-        self.assertIn(target, self.runtime.latest_state["ignored_targets"])
-        self.assertEqual(self.runtime.store.history(), before)
-        self.assertTrue(self.runtime.handle_message({"op": "set_excluded_visibility", "hidden": True})["ok"])
-        self.assertTrue(agent.load_config()["hide_excluded"])
-
     def test_background_metadata_groups_sites_without_tracking_background_tabs(self):
         parent, child = "site:example.org", "site:app.example.org"
         self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
@@ -630,17 +641,18 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.group_suggestions(rows), [])
 
     def test_review_classification(self):
-        self.runtime.tick(2)
+        self.runtime.tick(agent.REVIEW_MIN_SECONDS)
         state = self.runtime.latest_state
         self.assertEqual(state["focused_id"], "app:test")
         self.assertEqual(state["tracked"][0]["category"], "unclassified")
         self.clients = []
         self.runtime.tick(0)
         self.assertEqual(self.runtime.latest_state["tracked"][0]["visible_windows"], 0)
+        self.assertTrue(self.runtime.latest_state["tracked"][0]["review"])
         self.assertTrue(self.runtime.handle_message({
             "op": "classify", "target_id": "app:test", "category": "productive"
         })["ok"])
-        self.assertEqual(self.runtime.store.pending_targets(), [])
+        self.assertEqual(self.runtime.store.pending_targets(), {})
         self.assertEqual(self.runtime.config["targets"]["app:test"]["category"], "productive")
 
     def test_site_metadata_names_are_dynamic_and_persisted(self):
@@ -648,7 +660,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [
             {"id": 1, "title": "Workspace", "domain": "tools.example.org", "site_name": "New Service"}
         ]})
-        self.runtime.tick(1)
+        self.runtime.tick(agent.REVIEW_MIN_SECONDS)
         row = self.runtime.latest_state["tracked"][0]
         self.assertEqual(row["id"], "site:tools.example.org")
         self.assertEqual(row["name"], "New Service")
@@ -663,7 +675,7 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(self.runtime.handle_message({"op": "exclude", "target_id": "app:test"})["ok"])
         self.runtime.tick(1)
         self.assertEqual(self.runtime.latest_state["tracked"], [])
-        self.assertEqual(self.runtime.store.pending_targets(), [])
+        self.assertEqual(self.runtime.store.pending_targets(), {})
         self.assertEqual(self.runtime.latest_state["ignored_targets"], ["app:test"])
         self.assertTrue(self.runtime.handle_message({"op": "unexclude", "target_id": "app:test"})["ok"])
         self.runtime.tick(1)
@@ -1009,9 +1021,9 @@ class AgentTests(unittest.TestCase):
                 "app_id": "xdg-desktop-portal-gtk", "window_title": "", "address": "0x999"
             }])
         day = dt.date.today().isoformat()
-        self.runtime.store.add_times({"app:xdg-desktop-portal-gtk": "unclassified"}, 16, "bucket", day)
+        self.runtime.store.add_times({"app:xdg-desktop-portal-gtk": "unclassified"}, agent.REVIEW_MIN_SECONDS, "bucket", day)
         self.runtime.tick(0)
-        self.assertEqual(self.runtime.store.pending_targets(), ["app:xdg-desktop-portal-gtk"])
+        self.assertEqual(list(self.runtime.store.pending_targets()), ["app:xdg-desktop-portal-gtk"])
         self.assertTrue(any(row["id"] == "app:xdg-desktop-portal-gtk"
                             for row in self.runtime.latest_state["tracked"]))
 
