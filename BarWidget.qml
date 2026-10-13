@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -175,14 +176,35 @@ BarWidget {
 
     // Shown instead of app chips: centred in a standard icon slot so the bar's
     // active indicator lines up with it, like Omarchy's own icons.
+    // Bar icons are font glyphs on the text baseline, not geometrically centred.
+    // An invisible reference glyph, laid out like BarIconButton's, gives their
+    // painted centre so the mark lines up with neighbouring icons in any font.
+    Text {
+      id: iconReference
+      visible: false
+      anchors.centerIn: parent
+      text: String.fromCodePoint(0xF0765)  // nf-md-circle: symmetric, so its centre is the icon centre
+      font.family: button.fontFamily
+      font.pixelSize: Style.bar.iconFont
+      renderType: Text.NativeRendering
+    }
+    TextMetrics {
+      id: iconReferenceMetrics
+      font: iconReference.font
+      text: iconReference.text
+    }
+
     FocusMark {
       id: logo
       objectName: "focusLogo"
+      readonly property real iconCenterY: iconReference.y + iconReference.baselineOffset
+        + iconReferenceMetrics.tightBoundingRect.y + iconReferenceMetrics.tightBoundingRect.height / 2
       visible: root.visibleTargets.length === 0
       x: connectionIndicator.visible
         ? connectionIndicator.x + connectionIndicator.width + Style.space(5)
         : Math.round((button.width - width) / 2)
-      anchors.verticalCenter: parent.verticalCenter
+      // Snap to device pixels: logical rounding drifts a pixel at fractional scales.
+      y: Math.round((iconCenterY - height / 2) * Screen.devicePixelRatio) / Screen.devicePixelRatio
       size: Math.round(Style.bar.iconFont * 0.9)
       color: button.foreground
       accent: Color.accent
