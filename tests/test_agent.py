@@ -39,13 +39,18 @@ class AgentTests(unittest.TestCase):
         self.session = mock.patch.object(agent, "session_status", lambda: (False, False))
         self.schedule = mock.patch.object(agent, "in_work_hours", lambda now, schedule: True)
         self.hypr = mock.patch.object(agent, "hypr_json", return_value=[])
-        for patcher in (self.visible, self.focus, self.session, self.schedule, self.hypr):
+        # Never show real desktop notifications from tests.
+        self.popen = mock.patch.object(agent.subprocess, "Popen")
+        for patcher in (self.visible, self.focus, self.session, self.schedule, self.hypr, self.popen):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.runtime = agent.Runtime()
         self.addCleanup(lambda: self.runtime.store.db.close())
         self.closed = []
-        self.runtime.close_app_windows = self.closed.extend
+        # Applies to every Runtime a test creates, including after simulated restarts.
+        closer = mock.patch.object(agent.Runtime, "close_app_windows", lambda runtime, clients: self.closed.extend(clients))
+        closer.start()
+        self.addCleanup(closer.stop)
 
     def test_app_name_comes_from_desktop_metadata(self):
         data = pathlib.Path(self.temp.name) / "data" / "applications"
@@ -282,6 +287,133 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.store.history(), [])
         self.assertIn("app:test", self.runtime.config["targets"])
         self.assertTrue(exported.exists())
+
+    def consume(self, target, seconds, category="consumption"):
+        now = dt.datetime.now().astimezone()
+        self.runtime.store.add_times({target: category}, seconds, agent.current_hour_bucket(now), now.date().isoformat())
+
+    def test_daily_limit_uses_todays_consumption(self):
+        target = "app:test"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.assertTrue(self.runtime.handle_message({"op": "set_limit_period", "target_id": target, "period": "day"})["ok"])
+        self.assertEqual(self.runtime.config["targets"][target]["quota_minutes"], 60)
+        self.assertTrue(self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 300})["ok"])
+        self.assertEqual(self.runtime.config["targets"][target]["quota_minutes"], 300)
+        yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+        self.runtime.store.add_times({target: "consumption"}, 3600, "old", yesterday)
+        self.consume(target, 300 * 60 - 5)
+        self.runtime.tick(1)
+        row = self.runtime.latest_state["tracked"][0]
+        self.assertEqual((row["limit_period"], row["remaining_seconds"]), ("day", 4))
+        self.assertEqual(self.closed, [])
+        self.runtime.tick(5)
+        self.assertEqual(len(self.closed), 1)
+        self.assertFalse(self.runtime.handle_message({"op": "set_limit_period", "target_id": target, "period": "week"})["ok"])
+
+    def test_snooze_grants_five_minutes_once_per_period(self):
+        target = "app:test"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
+        self.assertFalse(self.runtime.handle_message({"op": "snooze", "target_id": "app:unknown"})["ok"])
+        self.runtime.tick(61)
+        self.assertTrue(self.runtime.latest_state["tracked"][0]["can_snooze"])
+        self.assertEqual(len(self.closed), 1)
+        self.assertTrue(self.runtime.handle_message({"op": "snooze", "target_id": target})["ok"])
+        self.assertFalse(self.runtime.handle_message({"op": "snooze", "target_id": target})["ok"])
+        self.runtime.tick(1)
+        row = self.runtime.latest_state["tracked"][0]
+        self.assertEqual(row["remaining_seconds"], agent.SNOOZE_SECONDS - 2)
+        self.assertFalse(row["can_snooze"])
+        self.assertEqual(len(self.closed), 1)
+
+    def test_limit_notification_offers_snooze_and_runs_it(self):
+        target = "app:test"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
+        process = mock.Mock()
+        process.communicate.return_value = ("snooze\n", "")
+        threads = []
+        with mock.patch.object(agent.subprocess, "Popen", return_value=process) as popen, \
+                mock.patch.object(agent.threading, "Thread", side_effect=lambda target, daemon: threads.append(target) or mock.Mock()):
+            self.runtime.tick(61)
+        command = popen.call_args.args[0]
+        self.assertIn("Test closed.", command)
+        self.assertEqual(command[-2:], ["-A", "snooze=5 more minutes"])
+        threads[-1]()
+        self.assertEqual(self.runtime.config["snoozes"][target], agent.current_hour_bucket(dt.datetime.now().astimezone()))
+
+    def test_focus_session_blocks_consumption_and_overrides_pause_and_schedule(self):
+        target = "app:test"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "pause", "paused": True, "duration": "manual"})
+        self.assertFalse(self.runtime.handle_message({"op": "focus", "minutes": "10"})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "focus", "minutes": "25"})["ok"])
+        self.assertFalse(self.runtime.paused)
+        with mock.patch.object(agent, "in_work_hours", lambda now, schedule: False):
+            self.runtime.tick(1)
+        row = self.runtime.latest_state["tracked"][0]
+        self.assertEqual((row["remaining_seconds"], row["limit_reason"], row["can_snooze"]), (0, "focus", False))
+        self.assertEqual(len(self.closed), 1)
+        self.assertTrue(self.runtime.latest_state["focus_until"])
+        self.runtime.config["focus_session"]["until"] = time.time() - 1
+        self.runtime.tick(1)
+        self.assertIsNone(self.runtime.latest_state["focus_until"])
+        self.assertEqual(self.runtime.config["focus_session"], {"until": None})
+
+    def test_daily_budget_caps_all_consumption(self):
+        for target in ("app:test", "app:other"):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+            self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 60})
+        self.assertFalse(self.runtime.handle_message({"op": "set_budget", "minutes": 9999})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "set_budget", "minutes": 30})["ok"])
+        self.consume("app:other", 30 * 60)
+        self.runtime.tick(1)
+        row = next(row for row in self.runtime.latest_state["tracked"] if row["id"] == "app:test")
+        self.assertEqual((row["remaining_seconds"], row["limit_reason"]), (0, "budget"))
+        self.assertGreaterEqual(self.runtime.latest_state["budget_used_seconds"], 30 * 60)
+        self.runtime.handle_message({"op": "set_budget", "minutes": 0})
+        self.runtime.tick(0)
+        row = next(row for row in self.runtime.latest_state["tracked"] if row["id"] == "app:test")
+        self.assertEqual(row["limit_reason"], "limit")
+
+    def test_weekly_report_once_per_week_with_comparison(self):
+        today = dt.date.today()
+        monday = today - dt.timedelta(days=today.weekday())
+        with self.runtime.store.db:
+            for offset, seconds in ((7, 7200), (14, 3600)):
+                day = (monday - dt.timedelta(days=offset)).isoformat()
+                self.runtime.store.db.execute("INSERT INTO daily_screen_time VALUES(?,?,?)", (day, seconds, day))
+        self.runtime.config["last_weekly_summary"] = ""
+        with mock.patch.object(self.runtime, "notify") as notify:
+            self.runtime.weekly_report(dt.datetime.now().astimezone())
+            self.runtime.weekly_report(dt.datetime.now().astimezone())
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[1], "2h 00m screen time · 0m consumption · +1h 00m vs week before")
+        self.runtime.config["last_weekly_summary"] = ""
+        self.runtime.handle_message({"op": "set_weekly_summary", "enabled": False})
+        with mock.patch.object(self.runtime, "notify") as notify:
+            self.runtime.weekly_report(dt.datetime.now().astimezone())
+        notify.assert_not_called()
+
+    def test_config_pruning_keeps_known_entries_only(self):
+        self.runtime.handle_message({"op": "classify", "target_id": "site:kept.example", "category": "neutral"})
+        self.runtime.config["site_identity"] = {"kept.example": {}, "gone.example": {}}
+        self.runtime.config["site_names"] = {"kept.example": "Kept", "gone.example": "Gone"}
+        self.runtime.config["dismissed_suggestions"] = ["site:gone.example|site:kept.example"]
+        self.runtime.config["independent_targets"] = ["site:gone.example", "site:kept.example"]
+        self.runtime.prune_config()
+        self.assertEqual(list(self.runtime.config["site_identity"]), ["kept.example"])
+        self.assertEqual(self.runtime.config["site_names"], {"kept.example": "Kept"})
+        self.assertEqual(self.runtime.config["dismissed_suggestions"], [])
+        self.assertEqual(self.runtime.config["independent_targets"], ["site:kept.example"])
+
+    def test_state_has_labels_and_single_browser_status(self):
+        self.runtime.handle_message({"op": "exclude", "target_id": "app:org.example.Mail"})
+        self.runtime.tick(1)
+        state = self.runtime.latest_state
+        self.assertEqual(state["labels"]["app:org.example.Mail"], "Example Mail")
+        self.assertEqual(state["labels"]["app:test"], "Test")
+        self.assertIn(state["diagnostics"]["browser_status"], {"browser_closed", "connecting", "browser_offline"})
 
     def test_state_is_written_on_change_or_heartbeat_only(self):
         self.clients = []
@@ -970,7 +1102,8 @@ class AgentTests(unittest.TestCase):
         notify.assert_called_once()
         args = notify.call_args.args[0]
         self.assertIn("Time limit reached · Test", args)
-        self.assertIn("1 min hourly limit", args[-1])
+        self.assertIn("Test stays open.", args)
+        self.assertEqual(args[-2:], ["-A", "snooze=5 more minutes"])
 
     def test_reclassification_keeps_quota_edit(self):
         target = "app:test"

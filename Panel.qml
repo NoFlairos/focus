@@ -15,26 +15,26 @@ Panel {
   property Item anchorItem: null
   property string page: "now"
   property string manageSection: ""
-  property var pendingWarning: null
-  readonly property bool savedWarning: !!(widget && widget.snapshot && widget.snapshot.warn_before_limit)
-  readonly property bool warningEnabled: pendingWarning === null ? savedWarning : pendingWarning
-  onSavedWarningChanged: {
-    if (pendingWarning !== null && savedWarning === pendingWarning) {
-      pendingWarning = null
-      warningAckTimer.stop()
-    }
+  readonly property var snapshot: widget && widget.snapshot ? widget.snapshot : ({})
+  // A setting shown at its new value at once, until the agent confirms it or 5 s pass.
+  component Pending: QtObject {
+    id: pending
+    property var saved
+    property var value: undefined
+    readonly property var current: value !== undefined ? value : saved
+    property Timer timer: Timer { interval: 5000; onTriggered: pending.value = undefined }
+    onSavedChanged: if (value !== undefined && saved === value) { value = undefined; timer.stop() }
+    function set(next, command) { value = next; root.runAgent(command); timer.restart() }
   }
-  function toggleWarning() {
-    pendingWarning = !warningEnabled
-    runAgent(["warning", pendingWarning ? "on" : "off"])
-    warningAckTimer.restart()
-  }
-  Timer {
-    id: warningAckTimer
-    interval: 5000
-    onTriggered: root.pendingWarning = null
-  }
-  property bool pausePickerOpen: false
+  Pending { id: warningSetting; saved: root.snapshot.warn_before_limit === true }
+  Pending { id: weeklySetting; saved: root.snapshot.weekly_summary_enabled !== false }
+  Pending { id: budgetSetting; saved: Number(root.snapshot.daily_budget_minutes || 0) }
+  Pending { id: pauseSetting; saved: root.snapshot.paused === true }
+  Pending { id: focusSetting; saved: Number(root.snapshot.focus_until || 0) > 0 }
+  readonly property bool warningEnabled: warningSetting.current
+  readonly property bool paused: pauseSetting.current
+  readonly property bool focusActive: focusSetting.current
+  property string headerPicker: ""
   property bool confirmClearHistory: false
   property bool dataBusy: false
   property string dataFeedback: ""
@@ -88,10 +88,13 @@ Panel {
     dataAckTimer.restart()
   }
   function startPause(duration) {
-    pausePickerOpen = false
-    pendingPaused = true
-    pauseAckTimer.restart()
-    runAgent(["pause", duration])
+    headerPicker = ""
+    pauseSetting.set(true, ["pause", duration])
+  }
+  function startFocus(minutes) {
+    headerPicker = ""
+    focusSetting.set(minutes !== "off", ["focus", minutes])
+    if (minutes !== "off") pauseSetting.value = false
   }
   property string appSearch: ""
   property string appFilter: "all"
@@ -162,6 +165,43 @@ Panel {
     }
   }
 
+  // Label, optional hint and −/+ buttons around a value (quotas, budget).
+  component Stepper: Row {
+    id: stepper
+    property string label
+    property string hint: ""
+    property string valueText
+    signal step(int direction)
+    width: parent ? parent.width : 0
+    height: Style.space(30)
+    spacing: Style.space(4)
+    Column {
+      width: stepper.width - stepMinus.width - stepValue.width - stepPlus.width - stepper.spacing * 3
+      anchors.verticalCenter: parent.verticalCenter
+      Text { width: parent.width; text: stepper.label; color: root.textColor; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+      Text { width: parent.width; visible: text.length > 0; text: stepper.hint; color: root.mutedText; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+    }
+    Omarchy.Button {
+      id: stepMinus
+      width: Style.space(30); height: parent.height; horizontalPadding: 0
+      text: "−"; foreground: root.textColor; fontSize: Style.font.body; bordered: true; focusable: true
+      onClicked: stepper.step(-1)
+    }
+    Text {
+      id: stepValue
+      width: Style.space(52); height: parent.height
+      text: stepper.valueText
+      color: root.textColor; font.family: "monospace"; font.pixelSize: Style.font.bodySmall; font.bold: true
+      horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+    }
+    Omarchy.Button {
+      id: stepPlus
+      width: Style.space(30); height: parent.height; horizontalPadding: 0
+      text: "+"; foreground: root.textColor; fontSize: Style.font.body; bordered: true; focusable: true
+      onClicked: stepper.step(1)
+    }
+  }
+
   // Segmented choice built from native buttons (category, limit action, subdomain mode).
   component ChoiceRow: Row {
     id: choiceRow
@@ -176,7 +216,7 @@ Panel {
       model: choiceRow.choices
       delegate: Omarchy.Button {
         required property var modelData
-        objectName: choiceRow.buttonName ? (modelData.id === "group" ? "subdomainGroupButton" : choiceRow.buttonName) : ""
+        objectName: choiceRow.buttonName ? choiceRow.buttonName + ":" + modelData.id : ""
         width: (choiceRow.width - choiceRow.spacing * (choiceRow.choices.length - 1)) / choiceRow.choices.length
         height: choiceRow.height
         text: modelData.label
@@ -246,9 +286,6 @@ Panel {
     return Math.max(best, Number(row.today_seconds || 0))
   }, 0))
   readonly property bool working: !!(widget && widget.snapshot && widget.snapshot.working)
-  readonly property bool savedPaused: !!(widget && widget.snapshot && widget.snapshot.paused)
-  property var pendingPaused: null
-  readonly property bool paused: pendingPaused !== null ? pendingPaused : savedPaused
   readonly property var savedSchedule: widget && widget.snapshot && widget.snapshot.schedule
     ? widget.snapshot.schedule : ({ weekdays: [0, 1, 2, 3, 4], start: "08:00", end: "17:00" })
   property string scheduleStartDraft: "08:00"
@@ -274,6 +311,7 @@ Panel {
   property var pendingCategories: ({})
   property var pendingQuotas: ({})
   property var pendingLimitActions: ({})
+  property var pendingLimitPeriods: ({})
   property var commandQueue: []
 
   function modelRow(row) {
@@ -284,6 +322,10 @@ Panel {
       targetCategory: String(row.category || "neutral"),
       quotaSeconds: Number(row.quota_seconds || 600),
       limitAction: String(row.limit_action || "close"),
+      limitPeriod: String(row.limit_period || "hour"),
+      limitReason: String(row.limit_reason || ""),
+      remainingSeconds: row.remaining_seconds === null || row.remaining_seconds === undefined ? -1 : Number(row.remaining_seconds),
+      canSnooze: !!row.can_snooze,
       usedSeconds: Number(row.used_seconds || 0),
       visibleWindows: Number(row.visible_windows || 0),
       todaySeconds: Number(row.today_seconds || 0),
@@ -336,6 +378,11 @@ Panel {
         delete actions[row.id]
         root.pendingLimitActions = actions
       }
+      if (root.pendingLimitPeriods[row.id] === (row.limit_period || "hour")) {
+        var periods = Object.assign({}, root.pendingLimitPeriods)
+        delete periods[row.id]
+        root.pendingLimitPeriods = periods
+      }
     }
     for (var k = trackedModel.count - 1; k >= 0; k--) {
       if (!wanted[trackedModel.get(k).targetId]) trackedModel.remove(k)
@@ -376,12 +423,6 @@ Panel {
       scheduleEndDraft = savedSchedule.end
     }
   }
-  onSavedPausedChanged: {
-    if (pendingPaused !== null && savedPaused === pendingPaused) {
-      pendingPaused = null
-      pauseAckTimer.stop()
-    }
-  }
   Component.onCompleted: {
     syncTracked()
     scheduleStartDraft = savedSchedule.start
@@ -390,11 +431,6 @@ Panel {
 
   ListModel { id: trackedModel }
 
-  Timer {
-    id: pauseAckTimer
-    interval: 5000
-    onTriggered: root.pendingPaused = null
-  }
 
   // One agent process at a time keeps rapid edits in click order.
   Process {
@@ -414,6 +450,7 @@ Panel {
       root.pendingCategories = ({})
       root.pendingQuotas = ({})
       root.pendingLimitActions = ({})
+      root.pendingLimitPeriods = ({})
     }
   }
 
@@ -485,6 +522,24 @@ Panel {
     scheduleAckTimer.restart()
   }
 
+  // Open an entry from Now in Manage, expanded and scrolled into view.
+  function revealCard(item, id) {
+    appSearch = ""
+    appFilter = "all"
+    page = "manage"
+    manageSection = "apps"
+    expandedCardId = id
+    revealTarget = item
+    revealTimer.restart()
+  }
+  property Item revealTarget: null
+  Timer {
+    id: revealTimer
+    interval: 60
+    onTriggered: if (root.revealTarget) flick.contentY = Math.max(0, Math.min(flick.contentHeight - flick.height,
+      root.revealTarget.mapToItem(content, 0, 0).y - Style.space(8)))
+  }
+
   function mergeInto(source, destination) {
     mergingSource = source
     mergeFeedback = ""
@@ -512,16 +567,17 @@ Panel {
   }
 
   function togglePause() {
-    if (!widget) return
-    var next = !paused
-    pendingPaused = next
-    pauseAckTimer.restart()
-    runAgent(["pause", next ? "on" : "off"])
+    pauseSetting.set(!paused, ["pause", paused ? "off" : "on"])
   }
 
   function formatTime(seconds) {
     seconds = Math.max(0, Number(seconds || 0))
+    if (seconds >= 3600) return formatElapsed(seconds)
     return Math.floor(seconds / 60) + ":" + String(Math.floor(seconds % 60)).padStart(2, "0")
+  }
+
+  function formatQuota(minutes) {
+    return minutes >= 60 ? Math.floor(minutes / 60) + "h" + (minutes % 60 ? String(minutes % 60).padStart(2, "0") : "") : minutes + "m"
   }
 
   function formatElapsed(seconds) {
@@ -536,8 +592,10 @@ Panel {
     return Math.round(Number(value || 0)) + "m"
   }
 
+  // Names come ready from the agent; members and exclusions use its label map.
   function displayName(target) {
-    return root.widget ? root.widget.appLabel(target) : String(target.name || target.id || "")
+    var labels = snapshot.labels || ({})
+    return String(labels[target.id] || target.name || target.id || "")
   }
 
   KeyboardPanel {
@@ -616,9 +674,9 @@ Panel {
 
             Row {
               width: parent.width
-              spacing: Style.space(8)
+              spacing: Style.space(6)
               Text {
-                width: parent.width - screenTimeText.implicitWidth - pauseButton.width - parent.spacing * 2
+                width: parent.width - focusButton.width - pauseButton.width - parent.spacing * 2
                 text: "Focus"
                 textFormat: Text.PlainText
                 color: root.textColor
@@ -627,60 +685,79 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 font.bold: true
               }
-              Text {
-                id: screenTimeText
+              Omarchy.Button {
+                id: focusButton
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Today’s screen time " + (root.today.screen_seconds !== undefined
-                  ? root.formatElapsed(root.today.screen_seconds) : "—")
-                color: root.mutedText
-                font.pixelSize: Style.font.caption
-                HoverHandler { id: screenTimeHover }
-                ToolTip.visible: screenTimeHover.hovered
-                ToolTip.delay: 500
-                ToolTip.text: "Visible apps counted once during tracking hours"
-                  + (root.today.screen_started_at
-                    ? " · recorded since " + Qt.formatDateTime(new Date(root.today.screen_started_at), "HH:mm") : "")
+                height: Style.space(28)
+                text: root.focusActive ? "End session" : "Focus session"
+                tooltipText: "Block all Consumption for a while"
+                selected: root.headerPicker === "focus" || root.focusActive
+                foreground: root.textColor
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(10)
+                bordered: true
+                focusable: true
+                onClicked: root.focusActive ? root.startFocus("off")
+                  : root.headerPicker = root.headerPicker === "focus" ? "" : "focus"
               }
               Omarchy.Button {
                 id: pauseButton
                 anchors.verticalCenter: parent.verticalCenter
                 height: Style.space(28)
                 text: root.paused ? "Resume" : "Pause"
-                selected: root.pausePickerOpen
+                selected: root.headerPicker === "pause"
                 foreground: root.textColor
                 fontSize: Style.font.caption
                 horizontalPadding: Style.space(10)
                 bordered: true
                 focusable: true
-                onClicked: root.paused ? root.togglePause() : root.pausePickerOpen = !root.pausePickerOpen
+                onClicked: root.paused ? root.togglePause()
+                  : root.headerPicker = root.headerPicker === "pause" ? "" : "pause"
               }
             }
 
             Row {
-              visible: root.pausePickerOpen
+              visible: root.headerPicker !== ""
               width: parent.width
               spacing: Style.space(4)
               Repeater {
-                model: [{label:"15 min",value:"15"}, {label:"1 hour",value:"60"},
-                  {label:"Tomorrow",value:"tomorrow"}, {label:"Until resumed",value:"on"}]
+                model: root.headerPicker === "focus"
+                  ? [{label:"25 min",value:"25"}, {label:"50 min",value:"50"}, {label:"90 min",value:"90"}]
+                  : [{label:"15 min",value:"15"}, {label:"1 hour",value:"60"},
+                     {label:"Tomorrow",value:"tomorrow"}, {label:"Until resumed",value:"on"}]
                 delegate: Omarchy.Button {
                   required property var modelData
-                  width: (parent.width - Style.space(12)) / 4
+                  objectName: root.headerPicker + "Choice"
+                  width: (parent.width - Style.space(4) * (root.headerPicker === "focus" ? 2 : 3)) / (root.headerPicker === "focus" ? 3 : 4)
                   text: modelData.label
                   foreground: root.textColor
                   fontSize: Style.font.caption
                   horizontalPadding: Style.space(3)
                   focusable: true
                   bordered: true
-                  onClicked: root.startPause(modelData.value)
+                  onClicked: root.headerPicker === "focus" ? root.startFocus(modelData.value) : root.startPause(modelData.value)
                 }
               }
             }
+
             Text {
-              visible: root.paused && !!(root.widget && root.widget.snapshot && root.widget.snapshot.pause_until)
-              text: visible ? "Resumes " + Qt.formatDateTime(new Date(root.widget.snapshot.pause_until * 1000), "ddd HH:mm") : ""
+              id: screenTimeText
+              width: parent.width
+              text: "Today’s screen time " + (root.today.screen_seconds !== undefined
+                ? root.formatElapsed(root.today.screen_seconds) : "—")
+                + (root.focusActive && root.snapshot.focus_until
+                  ? "  ·  Focus session until " + Qt.formatDateTime(new Date(root.snapshot.focus_until * 1000), "HH:mm")
+                  : root.paused && root.snapshot.pause_until
+                  ? "  ·  Resumes " + Qt.formatDateTime(new Date(root.snapshot.pause_until * 1000), "ddd HH:mm") : "")
               color: root.mutedText
               font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              HoverHandler { id: screenTimeHover }
+              ToolTip.visible: screenTimeHover.hovered
+              ToolTip.delay: 500
+              ToolTip.text: "Visible apps counted once during tracking hours"
+                + (root.today.screen_started_at
+                  ? " · recorded since " + Qt.formatDateTime(new Date(root.today.screen_started_at), "HH:mm") : "")
             }
 
             Rectangle {
@@ -1009,16 +1086,25 @@ Panel {
                   }
                 }
               }
-              Omarchy.Button {
+              Omarchy.Toggle {
+                objectName: "warningToggle"
                 width: parent.width
-                objectName: "warningButton"
-                text: "Warn before limit · " + (root.warningEnabled ? "On" : "Off")
-                tooltipText: "Up to 2 minutes before the limit; half the quota for shorter limits."
-                selected: root.warningEnabled
+                label: "Warn before limit"
+                description: "Up to 2 minutes before"
+                checked: root.warningEnabled
                 foreground: root.textColor
-                fontSize: Style.font.bodySmall
-                focusable: true
-                onClicked: root.toggleWarning()
+                titleSize: Style.font.bodySmall
+                onClicked: warningSetting.set(!root.warningEnabled, ["warning", root.warningEnabled ? "off" : "on"])
+              }
+              Stepper {
+                objectName: "budgetStepper"
+                label: "Daily Consumption budget"
+                hint: budgetSetting.current > 0 ? root.formatElapsed(Number(root.snapshot.budget_used_seconds || 0)) + " used today" : "All Consumption combined"
+                valueText: budgetSetting.current > 0 ? root.formatQuota(budgetSetting.current) : "Off"
+                onStep: function(direction) {
+                  var next = Math.max(0, Math.min(720, budgetSetting.current + direction * 15))
+                  if (next !== budgetSetting.current) budgetSetting.set(next, ["budget", String(next)])
+                }
               }
               Omarchy.TextField {
                 objectName: "appSearch"
@@ -1069,6 +1155,10 @@ Panel {
                 required property string targetCategory
                 required property real quotaSeconds
                 required property string limitAction
+                required property string limitPeriod
+                required property string limitReason
+                required property real remainingSeconds
+                required property bool canSnooze
                 required property real usedSeconds
                 required property int visibleWindows
                 required property real todaySeconds
@@ -1092,6 +1182,7 @@ Panel {
                 readonly property string category: root.pendingCategories[targetId] || targetGroup.targetCategory
                 readonly property int quotaMinutes: root.pendingQuotas[targetId] || Math.round(targetGroup.quotaSeconds / 60)
                 readonly property string limitAction: root.pendingLimitActions[targetId] || targetGroup.limitAction
+                readonly property string limitPeriod: root.pendingLimitPeriods[targetId] || targetGroup.limitPeriod
                 readonly property string label: root.displayName({ id: targetId, name: targetGroup.targetName })
                 function changeCategory(value) {
                   if (category === value) return
@@ -1101,12 +1192,23 @@ Panel {
                   root.runAgent(["classify", targetId, value])
                 }
                 function changeQuota(delta) {
-                  var next = Math.max(1, Math.min(120, quotaMinutes + delta))
+                  var step = limitPeriod === "day" ? (quotaMinutes >= 60 ? 15 : 5) : 1
+                  var next = Math.max(1, Math.min(limitPeriod === "day" ? 720 : 120, quotaMinutes + delta * step))
                   if (next === quotaMinutes) return
                   var quotas = Object.assign({}, root.pendingQuotas)
                   quotas[targetId] = next
                   root.pendingQuotas = quotas
                   root.runAgent(["quota", targetId, String(next)])
+                }
+                function changeLimitPeriod(value) {
+                  if (limitPeriod === value) return
+                  var periods = Object.assign({}, root.pendingLimitPeriods)
+                  periods[targetId] = value
+                  root.pendingLimitPeriods = periods
+                  var quotas = Object.assign({}, root.pendingQuotas)
+                  quotas[targetId] = value === "day" ? 60 : 10
+                  root.pendingQuotas = quotas
+                  root.runAgent(["limit-period", targetId, value])
                 }
                 function changeLimitAction(value) {
                   if (limitAction === value) return
@@ -1121,6 +1223,18 @@ Panel {
                 color: root.softSurface
                 border.width: Style.spacing.hairline
                 border.color: root.outlineColor
+
+                // On Now, the name opens the entry in Manage.
+                MouseArea {
+                  z: 1
+                  x: targetContent.x
+                  y: targetContent.y
+                  width: nameBlock.width
+                  height: targetHeader.height
+                  enabled: root.page === "now" && targetGroup.configured
+                  cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: root.revealCard(targetGroup, targetCard.targetId)
+                }
 
                 Column {
                   id: targetContent
@@ -1182,8 +1296,10 @@ Panel {
                       Text {
                         id: remainingText
                         anchors.centerIn: parent
-                        text: root.formatTime(Math.max(0, targetCard.quotaMinutes * 60
-                          - targetGroup.usedSeconds)) + " left"
+                        text: targetGroup.remainingSeconds === 0 && targetGroup.limitReason === "focus" ? "Focus"
+                          : targetGroup.remainingSeconds === 0 && targetGroup.limitReason === "budget" ? "Budget"
+                          : root.formatTime(targetGroup.remainingSeconds >= 0 ? targetGroup.remainingSeconds
+                            : targetCard.quotaMinutes * 60) + " left"
                         textFormat: Text.PlainText
                         color: root.textColor
                         font.pixelSize: Style.font.bodySmall
@@ -1217,56 +1333,25 @@ Panel {
                     onChosen: function(id) { targetCard.changeCategory(id) }
                   }
 
-                  Row {
-                    visible: targetCard.category === "consumption" && root.page !== "now"
+                  Omarchy.Button {
+                    objectName: "snoozeButton"
+                    visible: targetGroup.canSnooze
                     width: parent.width
-                    height: Style.space(30)
-                    spacing: Style.space(4)
+                    text: "5 more minutes"
+                    tooltipText: "Once per limit period"
+                    foreground: root.textColor
+                    fontSize: Style.font.bodySmall
+                    bordered: true
+                    focusable: true
+                    enabled: root.serviceConnected
+                    onClicked: root.runAgent(["snooze", targetCard.targetId])
+                  }
 
-                    Text {
-                      width: parent.width - quotaMinus.width - quotaValue.width - quotaPlus.width - parent.spacing * 3
-                      height: parent.height
-                      text: "Hourly limit"
-                      color: root.mutedText
-                      font.pixelSize: Style.font.bodySmall
-                      verticalAlignment: Text.AlignVCenter
-                    }
-                    Omarchy.Button {
-                      id: quotaMinus
-                      width: Style.space(30)
-                      height: parent.height
-                      horizontalPadding: 0
-                      text: "−"
-                      foreground: root.textColor
-                      fontSize: Style.font.body
-                      bordered: true
-                      focusable: true
-                      onClicked: targetCard.changeQuota(-1)
-                    }
-                    Text {
-                      id: quotaValue
-                      width: Style.space(44)
-                      height: parent.height
-                      text: targetCard.quotaMinutes + "m"
-                      color: root.textColor
-                      font.family: "monospace"
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                      horizontalAlignment: Text.AlignHCenter
-                      verticalAlignment: Text.AlignVCenter
-                    }
-                    Omarchy.Button {
-                      id: quotaPlus
-                      width: Style.space(30)
-                      height: parent.height
-                      horizontalPadding: 0
-                      text: "+"
-                      foreground: root.textColor
-                      fontSize: Style.font.body
-                      bordered: true
-                      focusable: true
-                      onClicked: targetCard.changeQuota(1)
-                    }
+                  Stepper {
+                    visible: targetCard.category === "consumption" && root.page !== "now"
+                    label: targetCard.limitPeriod === "day" ? "Daily limit" : "Hourly limit"
+                    valueText: root.formatQuota(targetCard.quotaMinutes)
+                    onStep: function(direction) { targetCard.changeQuota(direction) }
                   }
 
                   Loader {
@@ -1276,6 +1361,13 @@ Panel {
                     sourceComponent: Column {
                       spacing: Style.space(7)
 
+                      ChoiceRow {
+                        visible: targetCard.category === "consumption"
+                        buttonName: "limitPeriodButton"
+                        choices: [{ id: "hour", label: "Per hour" }, { id: "day", label: "Per day" }]
+                        current: targetCard.limitPeriod
+                        onChosen: function(id) { targetCard.changeLimitPeriod(id) }
+                      }
                       Text {
                         visible: targetCard.category === "consumption"
                         text: "When limit is reached"
@@ -1514,12 +1606,8 @@ Panel {
               }
             }
             ManageHeader {
-              label: "Diagnostics"; section: "diagnostics"
-              statusText: !root.serviceConnected ? "Service offline"
-                : root.diagnostics.browser_connected && root.diagnostics.browser_can_close_tabs === false ? "Reload extension"
-                : root.diagnostics.browser_connected ? "Connected"
-                : !root.diagnostics.browser_running ? "Browser closed"
-                : !root.diagnostics.browser_connection_expected ? "Connecting" : "Browser offline"
+              label: "Connection & data"; section: "diagnostics"
+              statusText: root.widget ? root.widget.connectionLabel : ""
             }
             Column {
               visible: root.page === "manage" && root.manageSection === "diagnostics"
@@ -1534,9 +1622,7 @@ Panel {
               Text {
                 width: parent.width
                 text: "Browser extension · " + (!root.serviceConnected ? "Unavailable"
-                  : root.diagnostics.browser_connected ? "Connected"
-                  : !root.diagnostics.browser_running ? "Browser closed"
-                  : !root.diagnostics.browser_connection_expected ? "Connecting" : "Not connected")
+                  : root.widget ? root.widget.connectionLabel : "")
                 color: root.textColor
                 font.pixelSize: Style.font.bodySmall
               }
@@ -1576,9 +1662,8 @@ Panel {
               }
             }
 
-            ManageHeader { label: "Data export"; section: "data" }
             Column {
-              visible: root.page === "manage" && root.manageSection === "data"
+              visible: root.page === "manage" && root.manageSection === "diagnostics"
               width: parent.width
               spacing: Style.space(8)
               Row {
@@ -1763,6 +1848,17 @@ Panel {
                   }
                 }
               }
+            }
+
+            Omarchy.Toggle {
+              objectName: "weeklyToggle"
+              width: parent.width
+              label: "Weekly summary"
+              description: "A notification each Monday"
+              checked: weeklySetting.current
+              foreground: root.textColor
+              titleSize: Style.font.bodySmall
+              onClicked: weeklySetting.set(!weeklySetting.current, ["weekly-summary", weeklySetting.current ? "off" : "on"])
             }
 
             Rectangle {

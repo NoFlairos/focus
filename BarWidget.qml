@@ -23,11 +23,16 @@ BarWidget {
     var updated = Date.parse(String(snapshot.updated_at || ""))
     return isFinite(updated) && Math.abs(statusNow - updated) < 20000
   }
-  readonly property string connectionIssue: !serviceConnected ? "Service offline"
-    : snapshot.diagnostics && snapshot.diagnostics.browser_running === true
-      && snapshot.diagnostics.browser_can_close_tabs === false ? "Reload extension"
-    : snapshot.diagnostics && snapshot.diagnostics.browser_connection_expected === true
-      && snapshot.diagnostics.browser_connected === false ? "Browser offline" : ""
+  // Status comes from the agent; only "service offline" is inferred here, from staleness.
+  readonly property string connectionStatus: !serviceConnected ? "service_offline"
+    : String((snapshot.diagnostics || {}).browser_status || "browser_closed")
+  readonly property var connectionLabels: ({
+    service_offline: "Service offline", reload_extension: "Reload extension", browser_offline: "Browser offline",
+    connected: "Connected", connecting: "Connecting", browser_closed: "Browser closed" })
+  readonly property string connectionLabel: connectionLabels[connectionStatus] || ""
+  readonly property string connectionIssue: ["service_offline", "reload_extension", "browser_offline"]
+    .indexOf(connectionStatus) >= 0 ? connectionLabel : ""
+  readonly property double focusUntil: Number(snapshot.focus_until || 0) * 1000
   readonly property bool trackingPaused: snapshot.paused === true || snapshot.working === false
   readonly property var visibleTargets: (snapshot.tracked || []).filter(function(target) {
     return Number(target.visible_windows || 0) > 0
@@ -72,29 +77,12 @@ BarWidget {
   }
 
   function appLabel(target) {
-    var name = String(target.name || target.id || "").trim()
-    if (String(target.id || "").startsWith("site:")) return name
-    var appId = String(target.id || "").replace(/^app:/, "")
-    if (name.toLowerCase() === appId.toLowerCase()) {
-      var browserApp = name.match(/^chrome-([^_]+)(?:__.*)?$/i)
-      if (browserApp) {
-        var domain = browserApp[1].replace(/^www\./i, "").toLowerCase()
-        name = domain
-      }
-      else {
-        var parts = name.split(".").filter(function(part) {
-          return part && ["org", "com", "io", "net", "app", "desktop"].indexOf(part.toLowerCase()) === -1
-        })
-        if (parts.length) name = parts.map(function(part) {
-          return part.charAt(0).toUpperCase() + part.slice(1)
-        }).join(" ")
-      }
-    }
-    return name ? name.charAt(0).toUpperCase() + name.slice(1) : "FOCUS"
+    return String(target.name || target.id || "") || "FOCUS"
   }
 
   function remainingLabel(seconds) {
     var value = Math.max(0, Math.floor(Number(seconds || 0)))
+    if (value >= 3600) return Math.floor(value / 3600) + "h" + String(Math.floor(value % 3600 / 60)).padStart(2, "0")
     return Math.floor(value / 60) + ":" + String(value % 60).padStart(2, "0")
   }
 
@@ -147,6 +135,7 @@ BarWidget {
       + (root.connectionIssue === "Browser offline" ? "\nWebsite tracking and tab limits unavailable."
         : root.connectionIssue === "Reload extension" ? "\nTab closing unavailable. Reload Focus in chrome://extensions."
         : "\nTracking and limits unavailable.")
+      : root.focusUntil > root.statusNow ? "Focus session · until " + Qt.formatTime(new Date(root.focusUntil), "HH:mm")
       : root.trackingPaused ? "Focus · tracking paused"
       + (root.snapshot.idle && !root.snapshot.paused ? " while idle" : "")
       : root.visibleTargets.length ? root.visibleTargets.map(function(target) {

@@ -47,11 +47,17 @@ Paths follow your XDG settings when configured.
 - **Now:** visible apps and sites. **Review:** classify or exclude entries used
   for at least 10 minutes over the last 7 days.
 - **History:** the last seven days. **Manage:** schedule (saved automatically),
-  apps & sites, diagnostics and exports. **Pause:** stop tracking and limits.
+  apps & sites, connection and data export. **Pause:** stop tracking and limits.
 
-Defaults: weekdays 08:00–17:00, 10 minutes/hour for Consumption. Limits reset
-at each clock hour. The default limit action **closes the window or active tab**;
-choose Notify or Keep open under **More** on the entry.
+Defaults: weekdays 08:00–17:00, 10 minutes/hour for Consumption. Each entry's
+limit is **per hour** (resets at each clock hour) or **per day**; the default action
+**closes the window or active tab**. Choose Notify or Keep open under **More**.
+
+- **5 more minutes:** once per limit period, from the limit notification or the entry.
+- **Daily Consumption budget:** one cap for all Consumption together (Apps & sites).
+- **Focus session:** 25, 50 or 90 minutes blocking all Consumption, even outside
+  the schedule. Ending or pausing stops it.
+- **Weekly summary:** a Monday notification with last week's screen time (History).
 
 Screen time counts simultaneous activity once. Per-app totals can therefore
 exceed screen time. Tracking stops while paused, idle, locked or outside the schedule.

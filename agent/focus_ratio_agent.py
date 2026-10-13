@@ -33,6 +33,10 @@ from typing import Any
 APP_NAME = "focus-ratio"
 CATEGORIES = {"productive", "neutral", "consumption"}
 LIMIT_ACTIONS = {"close", "notify", "keep_open"}
+LIMIT_PERIODS = {"hour": 120, "day": 720}  # period -> maximum quota in minutes
+SNOOZE_SECONDS = 300
+FOCUS_SESSION_MINUTES = {"25", "50", "90"}
+MAX_DAILY_BUDGET_MINUTES = 720
 IGNORED_APP_IDS: set[str] = set()
 DEFAULT_QUOTA_MINUTES = 10
 POLL_SECONDS = 1.0
@@ -128,6 +132,11 @@ def default_config() -> dict[str, Any]:
         "link_schema": 2,
         "independent_targets": [],
         "warn_before_limit": True,
+        "weekly_summary": True,
+        "last_weekly_summary": "",
+        "daily_budget_minutes": 0,
+        "snoozes": {},
+        "focus_session": {"until": None},
         "dismissed_suggestions": [],
         "pause_state": {"active": False, "until": None},
     }
@@ -281,6 +290,11 @@ def valid_schedule(value: Any) -> dict[str, Any]:
 
 def current_hour_bucket(now: dt.datetime) -> str:
     return now.replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+
+
+def format_duration(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
 
 
 def canonical_domain(domain: str) -> str:
@@ -451,6 +465,15 @@ class Store:
             days_map[day]["screen_started_at"] = started_at
         return [{"day": day, **values} for day, values in sorted(days_map.items())]
 
+    def consumption_today(self, day: str, target_id: str | None = None) -> float:
+        query = "SELECT SUM(seconds) FROM daily_usage WHERE day=? AND category='consumption'"
+        args: tuple = (day,)
+        if target_id is not None:
+            query += " AND target_id=?"
+            args += (target_id,)
+        row = self.db.execute(query, args).fetchone()
+        return float(row[0] or 0)
+
     def target_today(self, day: str) -> dict[str, float]:
         rows = self.db.execute("SELECT target_id, SUM(seconds) FROM daily_usage WHERE day=? GROUP BY target_id", (day,)).fetchall()
         return {target_id: float(seconds) for target_id, seconds in rows}
@@ -532,10 +555,11 @@ class Runtime:
                     self.config["service_links"][source] = exact
             self.config["link_schema"] = 2
             save_config(self.config)
+        self.reconciled: int | None = None
+        self.browser_windows: dict[str, dict[str, Any]] = {}
         self.migrate_subdomain_rules()
         self.reconcile_targets()
         self.browser_sessions: dict[str, tuple[float, list]] = {}
-        self.browser_windows: dict[str, dict[str, Any]] = {}
         self.last_browser_snapshot = 0.0
         self.browser_opened_at: float | None = None
         self.paused = bool(self.config["pause_state"].get("active"))
@@ -553,6 +577,85 @@ class Runtime:
             self.pause_until = None
             self.config["pause_state"] = {"active": False, "until": None}
             save_config(self.config)
+
+    def focus_until(self, now: dt.datetime) -> float | None:
+        until = self.config["focus_session"].get("until")
+        return until if until and now.timestamp() < until else None
+
+    def limit_status(self, target_id: str, target: dict[str, Any], now: dt.datetime) -> dict[str, Any] | None:
+        """One place for every reason a Consumption entry runs out: its own limit
+        (per hour or per day), the daily budget, or a focus session."""
+        if target.get("category") != "consumption":
+            return None
+        period = target.get("limit_period", "hour")
+        period = period if period in LIMIT_PERIODS else "hour"
+        day = now.date().isoformat()
+        key = current_hour_bucket(now) if period == "hour" else "day:" + day
+        quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
+        used = (self.store.used_this_hour(target_id, key) if period == "hour"
+                else self.store.consumption_today(day, target_id))
+        snoozed = self.config["snoozes"].get(target_id) == key
+        extra = SNOOZE_SECONDS if snoozed else 0
+        remaining, reason = max(0, quota + extra - int(used)), "limit"
+        budget = int(self.config["daily_budget_minutes"]) * 60
+        if budget:
+            left = max(0, budget + extra - int(self.store.consumption_today(day)))
+            if left < remaining:
+                remaining, reason = left, "budget"
+        if self.focus_until(now):
+            remaining, reason = 0, "focus"
+        return {"quota": quota, "used": int(used), "remaining": remaining, "period": period,
+                "period_key": key, "reason": reason, "snoozed": snoozed,
+                "can_snooze": reason != "focus" and not snoozed}
+
+    def notify(self, title: str, body: str, snooze_target: str = "") -> None:
+        """Desktop notification; a limit notification offers one 5-minute extension."""
+        command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, body]
+        if snooze_target:
+            command += ["-A", "snooze=5 more minutes"]
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.PIPE if snooze_target else subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, text=True)
+        except OSError:
+            return
+        if not snooze_target:
+            return
+
+        def wait_for_action() -> None:
+            try:
+                choice, _ = process.communicate(timeout=3600)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                process.kill()
+                return
+            if str(choice).strip() == "snooze":
+                self.handle_message({"op": "snooze", "target_id": snooze_target})
+
+        threading.Thread(target=wait_for_action, daemon=True).start()
+
+    def weekly_report(self, now: dt.datetime) -> None:
+        """Once per ISO week, summarise the previous week if it has recorded screen time."""
+        week = "%d-W%02d" % now.isocalendar()[:2]
+        if not self.config["weekly_summary"] or self.config["last_weekly_summary"] == week:
+            return
+        self.config["last_weekly_summary"] = week
+        save_config(self.config)
+        monday = now.date() - dt.timedelta(days=now.weekday())
+        history = {row["day"]: row for row in self.store.history(21)}
+
+        def totals(start: dt.date) -> tuple[int, int, float]:
+            rows = [history[day] for day in ((start + dt.timedelta(days=i)).isoformat() for i in range(7)) if day in history]
+            recorded = [row for row in rows if "screen_seconds" in row]
+            return (sum(row["screen_seconds"] for row in recorded), len(recorded),
+                    sum(row.get("consumption", 0) for row in rows))
+
+        last, last_days, consumed = totals(monday - dt.timedelta(days=7))
+        before, before_days, _ = totals(monday - dt.timedelta(days=14))
+        if not last_days:
+            return
+        body = format_duration(last) + " screen time · " + format_duration(consumed * 60) + " consumption"
+        if before_days:
+            body += " · " + ("+" if last >= before else "−") + format_duration(abs(last - before)) + " vs week before"
+        self.notify("Last week in Focus", body)
 
     @staticmethod
     def weekly_summary(history: list[dict], today: dt.date) -> dict:
@@ -710,9 +813,35 @@ class Runtime:
         if changed:
             save_config(self.config)
 
+    def prune_config(self) -> None:
+        """Forget metadata and exceptions for entries with no settings, links or history left."""
+        config = self.config
+        known = (set(config["targets"]) | set(config["service_links"]) | set(config["service_links"].values())
+                 | self.store.target_ids() | set(config["ignored_targets"]) | set(config["review_targets"]))
+        visible = {canonical_domain(str(window.get("domain", ""))) for window in self.browser_windows.values()}
+        keep = lambda domain: "site:" + domain in known or domain in visible
+        before = json.dumps([config["site_identity"], config["site_names"], config["dismissed_suggestions"],
+                             config["independent_targets"]], sort_keys=True)
+        config["site_identity"] = {domain: value for domain, value in config["site_identity"].items() if keep(domain)}
+        config["site_names"] = {domain: value for domain, value in config["site_names"].items() if keep(domain)}
+        config["dismissed_suggestions"] = [key for key in config["dismissed_suggestions"]
+                                           if all(part in known for part in key.split("|"))]
+        config["independent_targets"] = [key for key in config["independent_targets"] if key in known]
+        if json.dumps([config["site_identity"], config["site_names"], config["dismissed_suggestions"],
+                       config["independent_targets"]], sort_keys=True) != before:
+            save_config(config)
+
     def reconcile_targets(self, extra_app_ids: set[str] | None = None) -> None:
         """Fold linked app settings and usage into one service target."""
         history_ids = self.store.target_ids()
+        # Grouping only needs to run when entries, links, identities or rules change.
+        signature = hash((json.dumps([sorted(self.config["targets"]), self.config["service_links"],
+                                      self.config["site_identity"], self.config["subdomain_rules"],
+                                      self.config["ignored_targets"], self.config["independent_targets"],
+                                      self.config["dismissed_suggestions"], self.config["review_targets"]],
+                                     sort_keys=True), frozenset(history_ids), frozenset(extra_app_ids or ())))
+        if signature == self.reconciled:
+            return
         app_ids = {target_id for target_id in self.config["targets"] if target_id.startswith("app:")}
         app_ids.update(target_id for target_id in self.config["ignored_targets"] if target_id.startswith("app:"))
         app_ids.update(target_id for target_id in history_ids if target_id.startswith("app:"))
@@ -746,6 +875,7 @@ class Runtime:
         if changed:
             self.config["ignored_targets"] = sorted(ignored)
             save_config(self.config)
+        self.reconciled = None if changed else signature
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any]:
         op = message.get("op")
@@ -903,6 +1033,54 @@ class Runtime:
                 self.config["pause_state"] = {"active": self.paused, "until": self.pause_until}
                 save_config(self.config)
                 return {"ok": True}
+            if op == "snooze":
+                target_id = self.resolve_target_id(str(message.get("target_id", "")))
+                target = self.config["targets"].get(target_id)
+                status = self.limit_status(target_id, target, dt.datetime.now().astimezone()) if target else None
+                if not status or not status["can_snooze"]:
+                    return {"ok": False, "error": "no extension available for this entry"}
+                self.config["snoozes"] = {key: value for key, value in self.config["snoozes"].items()
+                                          if key in self.config["targets"]}
+                self.config["snoozes"][target_id] = status["period_key"]
+                save_config(self.config)
+                return {"ok": True}
+            if op == "focus":
+                minutes = str(message.get("minutes", ""))
+                if minutes not in FOCUS_SESSION_MINUTES | {"off"}:
+                    return {"ok": False, "error": "focus session must be 25, 50, 90 or off"}
+                until = None if minutes == "off" else time.time() + int(minutes) * 60
+                self.config["focus_session"] = {"until": until}
+                if until:
+                    self.paused, self.pause_until = False, None
+                    self.config["pause_state"] = {"active": False, "until": None}
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_budget":
+                try:
+                    minutes = int(message.get("minutes"))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "budget must be a number of minutes"}
+                if not 0 <= minutes <= MAX_DAILY_BUDGET_MINUTES:
+                    return {"ok": False, "error": "budget must be 0–720 minutes"}
+                self.config["daily_budget_minutes"] = minutes
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_weekly_summary":
+                self.config["weekly_summary"] = bool(message.get("enabled"))
+                save_config(self.config)
+                return {"ok": True}
+            if op == "set_limit_period":
+                target_id = self.resolve_target_id(str(message.get("target_id", "")))
+                period = str(message.get("period", ""))
+                target = self.config["targets"].get(target_id)
+                if not target or period not in LIMIT_PERIODS:
+                    return {"ok": False, "error": "invalid target or limit period"}
+                if target.get("limit_period", "hour") != period:
+                    # Keep the budget comparable: 10 min/hour over a day is far stricter than 10 min/day.
+                    target["quota_minutes"] = 60 if period == "day" else DEFAULT_QUOTA_MINUTES
+                target["limit_period"] = period
+                save_config(self.config)
+                return {"ok": True}
             if op == "set_warning":
                 self.config["warn_before_limit"] = bool(message.get("enabled"))
                 save_config(self.config)
@@ -979,13 +1157,14 @@ class Runtime:
                 return {"ok": True}
             if op == "set_quota":
                 target_id = self.resolve_target_id(str(message.get("target_id", "")))
-                try:
-                    quota = max(1, min(120, int(message.get("quota_minutes"))))
-                except (TypeError, ValueError):
-                    return {"ok": False, "error": "quota must be 1–120 minutes"}
                 target = self.config["targets"].get(target_id)
                 if not target:
                     return {"ok": False, "error": "unknown target"}
+                maximum = LIMIT_PERIODS.get(target.get("limit_period", "hour"), 120)
+                try:
+                    quota = max(1, min(maximum, int(message.get("quota_minutes"))))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": f"quota must be 1–{maximum} minutes"}
                 target["quota_minutes"] = quota
                 save_config(self.config)
                 return {"ok": True}
@@ -1010,9 +1189,8 @@ class Runtime:
         now = dt.datetime.now().astimezone()
         self.resume_if_due(now)
         locked, idle = session_status()
-        if self.paused or locked or idle or not in_work_hours(now, self.config["schedule"]):
+        if self.paused or locked or idle or not (in_work_hours(now, self.config["schedule"]) or self.focus_until(now)):
             return []
-        bucket = current_hour_bucket(now)
         blocked = []
         site_ids = {key for key in self.config["targets"] if key.startswith("site:")}
         site_ids.update(key for key in self.config["service_links"] if key.startswith("site:"))
@@ -1021,10 +1199,9 @@ class Runtime:
             if target_id in self.config["ignored_targets"]:
                 continue
             target = self.config["targets"].get(target_id, {})
-            if target.get("category") == "consumption" and target.get("limit_action", "close") == "close":
-                quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
-                if self.store.used_this_hour(target_id, bucket) >= quota:
-                    blocked.append(canonical_domain(site_id[5:]))
+            status = self.limit_status(target_id, target, now)
+            if status and status["remaining"] == 0 and target.get("limit_action", "close") == "close":
+                blocked.append(canonical_domain(site_id[5:]))
         return blocked
 
     def visible_sites(self, clients: list[dict[str, Any]], browser_windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1067,6 +1244,26 @@ class Runtime:
             except (OSError, subprocess.SubprocessError):
                 pass
 
+    def target_row(self, target_id: str, target: dict[str, Any], category: str, configured: bool,
+                   now: dt.datetime) -> dict[str, Any]:
+        status = self.limit_status(target_id, {**target, "category": category}, now) if configured else None
+        return {
+            "id": target_id,
+            "name": target_display_name(target_id, target.get("name", "")),
+            "category": category,
+            "used_seconds": status["used"] if status else 0,
+            "quota_seconds": int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60,
+            "limit_period": status["period"] if status else target.get("limit_period", "hour"),
+            "limit_action": target.get("limit_action", "close"),
+            "remaining_seconds": status["remaining"] if status else None,
+            "limit_reason": status["reason"] if status else "",
+            "can_snooze": bool(status and status["can_snooze"] and status["remaining"] == 0),
+            "visible_windows": 0,
+            "configured": configured,
+            "focused": False,
+            "_status": status,
+        }
+
     def tick(self, delta: float) -> None:
         now = dt.datetime.now().astimezone()
         with self.lock:
@@ -1077,7 +1274,8 @@ class Runtime:
             browser_windows = list(self.browser_windows.values()) if browser_active else []
         locked, idle = session_status()
         browser_running = browser_is_running()
-        in_schedule = in_work_hours(now, schedule) and not locked and not idle and not paused
+        focus_active = bool(self.focus_until(now))
+        in_schedule = (in_work_hours(now, schedule) or focus_active) and not locked and not idle and not paused
         app_clients = visible_clients() if in_schedule else []
         focused_address = focused_window_address() if in_schedule else ""
         visible = list(app_clients)
@@ -1100,10 +1298,19 @@ class Runtime:
             self.reconcile_targets({"app:" + client["app_id"].casefold() for client in app_clients})
             ignored_targets = set(self.config["ignored_targets"])
             bucket = current_hour_bucket(now)
-            self.notified_limits = {item for item in self.notified_limits if item[1] == bucket}
-            self.warned_limits = {item for item in self.warned_limits if item[1] == bucket}
+            current = (bucket, "day:" + now.date().isoformat(), "focus:%s" % self.focus_until(now))
+            self.notified_limits = {item for item in self.notified_limits if item[1].startswith(current)}
+            self.warned_limits = {item for item in self.warned_limits if item[1].startswith(current)}
             day = now.date().isoformat()
-            self.store.prune(now)
+            if self.store.last_pruned_day != now.date():
+                self.store.prune(now)
+                self.prune_config()
+            ended = self.config["focus_session"].get("until")
+            if ended and now.timestamp() >= ended:
+                self.config["focus_session"] = {"until": None}
+                save_config(self.config)
+                self.notify("Focus session complete", "Limits are back to normal.")
+            self.weekly_report(now)
             seen: dict[str, list[dict[str, Any]]] = {}
             site_addresses = {str(site.get("address") or "") for site in site_clients}
             for client in visible:
@@ -1126,77 +1333,47 @@ class Runtime:
             self.store.add_times(categories, delta, bucket, day)
 
             rows = []
+            focus_until = self.focus_until(now)
+            notice_key = lambda status: ("focus:%s" % focus_until if status["reason"] == "focus"
+                                         else status["period_key"] + ":" + status["reason"])
             for target_id, clients in seen.items():
                 configured = target_id in targets
                 target = targets.get(target_id, {"name": clients[0].get("name") or target_id.split(":", 1)[1]})
-                category = categories[target_id]
-                quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
-                used = self.store.used_this_hour(target_id, bucket) if category == "consumption" and configured else 0
-                remaining = max(0, quota - int(used)) if category == "consumption" and configured else None
-                action = target.get("limit_action", "close")
-                warning_at = min(120, quota / 2)
-                if (self.config["warn_before_limit"] and category == "consumption" and action != "keep_open"
-                        and remaining is not None and 0 < remaining <= warning_at
-                        and (target_id, bucket) not in self.warned_limits):
-                    self.warned_limits.add((target_id, bucket))
-                    try:
-                        name = self.config["site_names"].get(target_id[5:], target_display_name(target_id, target.get("name", "")))
-                        subprocess.Popen(["notify-send", "-a", "Focus", "Limit approaching · " + name,
-                                          str(remaining) + " seconds left this hour."],
-                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    except OSError:
-                        pass
-                if category == "consumption" and remaining == 0:
-                    if action == "close":
-                        windows_to_close.extend(client for client in clients
-                                                if client.get("app_id") and client["app_id"].casefold() not in BROWSER_APP_IDS)
-                    elif action == "notify" and (target_id, bucket) not in self.notified_limits:
-                        self.notified_limits.add((target_id, bucket))
-                        try:
-                            app_name = target_display_name(target_id, target.get("name", ""))
-                            subprocess.Popen(["notify-send", "-a", "Focus",
-                                              "-i", "preferences-system-time",
-                                              "Time limit reached · " + app_name,
-                                              "Your " + str(quota // 60) + " min hourly limit is up. "
-                                              + app_name + " stays open."],
-                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        except OSError:
-                            pass
-                    # The browser extension closes matching site tabs on its next
-                    # native-messaging snapshot and prevents navigation until reset.
-                rows.append({
-                    "id": target_id,
-                    "name": target_display_name(target_id, target.get("name", "")),
-                    "category": category,
-                    "used_seconds": int(used),
-                    "quota_seconds": quota,
-                    "limit_action": action,
-                    "remaining_seconds": remaining,
-                    "visible_windows": len(clients),
-                    "configured": configured,
-                    "focused": any(client.get("address") == focused_address for client in clients) and bool(focused_address),
-                })
+                row = self.target_row(target_id, target, categories[target_id], configured, now)
+                status = row.pop("_status")
+                action = row["limit_action"]
+                name = row["name"]
+                if status and action != "keep_open":
+                    key = (target_id, notice_key(status))
+                    remaining = status["remaining"]
+                    if (self.config["warn_before_limit"] and status["reason"] != "focus"
+                            and 0 < remaining <= min(120, status["quota"] / 2) and key not in self.warned_limits):
+                        self.warned_limits.add(key)
+                        self.notify("Limit approaching · " + name,
+                                    format_duration(max(60, remaining)) + " left " + ("today" if status["reason"] == "budget"
+                                    or status["period"] == "day" else "this hour") + ".")
+                    if remaining == 0:
+                        if action == "close":
+                            # The browser extension closes matching site tabs on its next snapshot.
+                            windows_to_close.extend(client for client in clients
+                                                    if client.get("app_id") and client["app_id"].casefold() not in BROWSER_APP_IDS)
+                        if key not in self.notified_limits:
+                            self.notified_limits.add(key)
+                            title = {"focus": "Focus session · " + name + " is blocked",
+                                     "budget": "Daily consumption budget reached"}.get(status["reason"], "Time limit reached · " + name)
+                            body = name + (" closed." if action == "close" else " stays open.")
+                            self.notify(title, body, target_id if status["can_snooze"] else "")
+                row.update({"visible_windows": len(clients),
+                            "focused": any(client.get("address") == focused_address for client in clients) and bool(focused_address)})
+                rows.append(row)
             # Keep configured targets available after their windows are closed.
             for target_id, target in targets.items():
                 if target_id in seen or target_id in ignored_targets:
                     continue
                 category = target.get("category", "neutral")
-                if category not in CATEGORIES:
-                    category = "neutral"
-                quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
-                used = self.store.used_this_hour(target_id, bucket) if category == "consumption" else 0
-                rows.append({
-                    "id": target_id,
-                    "name": target_display_name(target_id, target.get("name", "")),
-                    "category": category,
-                    "used_seconds": int(used),
-                    "quota_seconds": quota,
-                    "limit_action": target.get("limit_action", "close"),
-                    "remaining_seconds": max(0, quota - int(used)) if category == "consumption" else None,
-                    "visible_windows": 0,
-                    "configured": True,
-                    "focused": False,
-                })
+                row = self.target_row(target_id, target, category if category in CATEGORIES else "neutral", True, now)
+                row.pop("_status")
+                rows.append(row)
             pending = self.store.pending_targets(REVIEW_DAYS)
             review_targets = set(self.config["review_targets"])
             for target_id in sorted(set(pending) | review_targets):
@@ -1227,18 +1404,34 @@ class Runtime:
                 families = sorted({domain_family(member[5:]) for member in row["members"] if member.startswith("site:")} - {""})
                 row["grouping_scopes"] = families
                 row["grouping_scope"] = domain_family(row["id"][5:]) if row["id"].startswith("site:") else (families[0] if families else "")
+            labels = {}
+            for target_id in {member for row in rows for member in row["members"]} | set(self.config["ignored_targets"]):
+                saved = targets.get(target_id, {}).get("name", "")
+                labels[target_id] = (self.config["site_names"].get(target_id[5:]) if target_id.startswith("site:") else "") \
+                    or target_display_name(target_id, saved)
+            diagnostics = {"browser_connected": browser_active,
+                           "browser_running": browser_running,
+                           "browser_connection_expected": browser_connection_expected,
+                           "browser_windows": len(browser_windows),
+                           "browser_can_close_tabs": all(
+                               window.get("tab_id") is not None for window in browser_windows
+                           ) if browser_windows else None,
+                           "matched_sites": len(site_clients)}
+            # One status for bar and panel; "service_offline" is inferred by the widget from staleness.
+            diagnostics["browser_status"] = (
+                ("reload_extension" if diagnostics["browser_can_close_tabs"] is False else "connected") if browser_active
+                else "browser_closed" if not browser_running
+                else "browser_offline" if browser_connection_expected else "connecting")
             history = self.store.history(14)
             today = dict(history[-1]) if history and history[-1]["day"] == day else {"day": day}
             self.latest_state = {
                 "updated_at": now.isoformat(timespec="seconds"),
-                "diagnostics": {"browser_connected": browser_active,
-                                "browser_running": browser_running,
-                                "browser_connection_expected": browser_connection_expected,
-                                "browser_windows": len(browser_windows),
-                                "browser_can_close_tabs": all(
-                                    window.get("tab_id") is not None for window in browser_windows
-                                ) if browser_windows else None,
-                                "matched_sites": len(site_clients)},
+                "diagnostics": diagnostics,
+                "focus_until": self.focus_until(now),
+                "daily_budget_minutes": self.config["daily_budget_minutes"],
+                "budget_used_seconds": int(self.store.consumption_today(day)),
+                "weekly_summary_enabled": self.config["weekly_summary"],
+                "labels": labels,
                 "working": in_schedule,
                 "paused": self.paused,
                 "pause_until": self.pause_until,
@@ -1366,7 +1559,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Focus local tracking service")
     parser.add_argument("--daemon", action="store_true", help="run the local tracker")
     parser.add_argument("--native-host", action="store_true", help="run the Chromium native messaging bridge")
-    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains"])
+    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "snooze", "focus", "budget",
+                                                         "weekly-summary", "limit-period"])
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
     ensure_dirs()
@@ -1400,6 +1594,16 @@ def main() -> int:
                 raise ValueError("invalid pause duration")
             response = request_agent({"op": "pause", "paused": value != "off",
                                       "duration": value if value in {"15", "60", "tomorrow"} else "manual"})
+        elif args.operation == "snooze" and len(args.arguments) == 1:
+            response = request_agent({"op": "snooze", "target_id": args.arguments[0]})
+        elif args.operation == "focus" and len(args.arguments) == 1:
+            response = request_agent({"op": "focus", "minutes": args.arguments[0]})
+        elif args.operation == "budget" and len(args.arguments) == 1:
+            response = request_agent({"op": "set_budget", "minutes": args.arguments[0]})
+        elif args.operation == "weekly-summary" and args.arguments in (["on"], ["off"]):
+            response = request_agent({"op": "set_weekly_summary", "enabled": args.arguments[0] == "on"})
+        elif args.operation == "limit-period" and len(args.arguments) == 2:
+            response = request_agent({"op": "set_limit_period", "target_id": args.arguments[0], "period": args.arguments[1]})
         elif args.operation == "warning" and len(args.arguments) == 1:
             response = request_agent({"op": "set_warning", "enabled": args.arguments[0] == "on"})
         elif args.operation == "dismiss-suggestion" and len(args.arguments) == 2:

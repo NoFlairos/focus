@@ -35,6 +35,8 @@ module('qs.Ui',{
 Item {property string moduleName; property var bar: null;}'''),
 'WidgetButton':(False,'''import QtQuick
 Item {property var bar; property string text; property bool labelVisible; property bool hasVisualContent; property real fontSize; property real fixedWidth; property color foreground: "white"; property color activeColor: "#a55555"; property string fontFamily: "Sans"; property string tooltipText; signal pressed(int buttonCode); width:fixedWidth; height:30; implicitWidth:fixedWidth; implicitHeight:30;}'''),
+'Toggle':(False,'''import QtQuick
+Item {property string label; property string description; property bool checked; property color foreground; property real titleSize; signal clicked(); width: 100; height: 30}'''),
 'TextField':(False,'''import QtQuick
 import QtQuick.Controls as Controls
 Controls.TextField { property color foreground; }'''),
@@ -64,6 +66,7 @@ Item {
  suggestions:[{source:"site:one.example",destination:"app:two",name:"Same name",reason:"Matching names"}]})
  property string agentPath: "unused"
  property bool serviceConnected: true
+ property string connectionLabel: "Connected"
  function appLabel(row) {return row.name;}
  }
  FocusPanel {id: focusPanel; anchors.fill:parent; widget:widget; page:"manage"}
@@ -72,25 +75,25 @@ Item {
  function test_connection_indicator() {
  var now = Date.now()
  focusBar.statusNow = now
- var online = {updated_at:new Date(now).toISOString(), working:true, diagnostics:{browser_running:true,browser_connected:true,browser_can_close_tabs:true},tracked:[]}
+ var online = {updated_at:new Date(now).toISOString(), working:true, diagnostics:{browser_status:"connected"},tracked:[]}
  focusBar.snapshot = online
  var indicator = findChild(focusBar, "connectionIndicator")
  verify(indicator !== null)
  compare(focusBar.connectionIssue, "")
  verify(!indicator.visible)
- focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_connected:false,browser_connection_expected:true}})
+ focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_status:"browser_offline"}})
  compare(focusBar.connectionIssue, "Browser offline")
  verify(indicator.visible)
- focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_connected:false,browser_running:false,browser_connection_expected:false}})
+ focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_status:"browser_closed"}})
  compare(focusBar.connectionIssue, "")
  verify(!indicator.visible)
- focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_connected:false,browser_running:true,browser_connection_expected:false}})
+ focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_status:"connecting"}})
  compare(focusBar.connectionIssue, "")
  verify(!indicator.visible)
  focusBar.showDiagnostics()
  compare(focusBar.panelItem.page, "manage")
  compare(focusBar.panelItem.manageSection, "diagnostics")
- focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_running:true,browser_connected:true,browser_can_close_tabs:false}})
+ focusBar.snapshot = Object.assign({}, online, {diagnostics:{browser_status:"reload_extension"}})
  compare(focusBar.connectionIssue, "Reload extension")
  focusBar.snapshot = Object.assign({}, online, {updated_at:new Date(now - 25000).toISOString()})
  compare(focusBar.connectionIssue, "Service offline")
@@ -190,9 +193,9 @@ Item {
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
- compare(findChild(focusPanel, "subdomainGroupButton"), null)
+ compare(findChild(focusPanel, "subdomainModeButton:group"), null)
  focusPanel.expandedCardId="site:one.example"; wait(30)
- var subdomains = findChild(focusPanel, "subdomainGroupButton")
+ var subdomains = findChild(focusPanel, "subdomainModeButton:group")
  verify(subdomains !== null)
  verify(subdomains.visible)
  verify(!subdomains.selected)
@@ -213,21 +216,33 @@ Item {
  verify(focusPanel.ignoredTargets.length > 0)
  focusPanel.commandQueue=[]
  focusPanel.pendingExcluded=[]
- var warning = findChild(focusPanel, "warningButton")
- verify(warning.selected)
+ var warning = findChild(focusPanel, "warningToggle")
+ verify(warning.checked)
  warning.clicked()
  compare(focusPanel.commandQueue[0][0], "warning")
  compare(focusPanel.commandQueue[0][1], "off")
- verify(!warning.selected)
- compare(warning.text, "Warn before limit · Off")
+ verify(!warning.checked)
  focusPanel.commandQueue=[]
  widget.snapshot = Object.assign({}, widget.snapshot, {warn_before_limit:false})
- verify(!warning.selected)
+ verify(!warning.checked)
  warning.clicked()
  compare(focusPanel.commandQueue[0][1], "on")
- verify(warning.selected)
+ verify(warning.checked)
  widget.snapshot = Object.assign({}, widget.snapshot, {warn_before_limit:true})
- compare(focusPanel.pendingWarning, null)
+ compare(focusPanel.warningEnabled, true)
+ focusPanel.commandQueue=[]
+ var budget = findChild(focusPanel, "budgetStepper")
+ compare(budget.valueText, "Off")
+ budget.step(1)
+ compare(focusPanel.commandQueue[0][0], "budget")
+ compare(focusPanel.commandQueue[0][1], "15")
+ compare(budget.valueText, "15m")
+ focusPanel.commandQueue=[]
+ var period = findChild(focusPanel, "limitPeriodButton:day")
+ verify(period !== null)
+ period.clicked()
+ compare(focusPanel.commandQueue[0][0], "limit-period")
+ compare(focusPanel.commandQueue[0][2], "day")
  focusPanel.commandQueue=[]
  var picker = findChild(focusPanel, "mergePicker")
  verify(picker !== null)
@@ -239,11 +254,26 @@ Item {
  focusPanel.pendingExcluded=[]
 
  focusPanel.manageSection="diagnostics"; wait(30)
- focusPanel.manageSection="data"; focusPanel.confirmClearHistory=true; wait(30)
+ focusPanel.confirmClearHistory=true; wait(30)
  focusPanel.confirmClearHistory=false
- focusPanel.pausePickerOpen=true; wait(30)
- focusPanel.pausePickerOpen=false
+ focusPanel.headerPicker="focus"; wait(30)
+ var choice = findChild(focusPanel, "focusChoice")
+ verify(choice !== null)
+ choice.clicked()
+ compare(focusPanel.commandQueue[0][0], "focus")
+ compare(focusPanel.commandQueue[0][1], "25")
+ verify(focusPanel.focusActive)
+ compare(focusPanel.headerPicker, "")
+ widget.snapshot = Object.assign({}, widget.snapshot, {focus_until: Date.now() / 1000 + 1500})
+ verify(focusPanel.focusActive)
+ widget.snapshot = Object.assign({}, widget.snapshot, {focus_until: null})
+ focusPanel.commandQueue=[]
  focusPanel.page="history"; wait(30)
+ var weekly = findChild(focusPanel, "weeklyToggle")
+ verify(weekly.checked)
+ weekly.clicked()
+ compare(focusPanel.commandQueue[0][1], "off")
+ focusPanel.commandQueue=[]
  focusPanel.page="manage"
  focusPanel.manageSection="apps"; wait(30)
  compare(focusPanel.matchingAppCount, 2)
