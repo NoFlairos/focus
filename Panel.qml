@@ -390,7 +390,8 @@ Panel {
   }
 
   onTrackedChanged: {
-    syncTracked()
+    if (scrollBusy) syncDeferred = true
+    else syncTracked()
     if (detachingMember && tracked.some(function(row) {
       return row.id === root.detachingMember && (!row.members || row.members.length === 1)
     })) {
@@ -430,6 +431,35 @@ Panel {
   }
 
   ListModel { id: trackedModel }
+
+  // Scrolling: momentum after touchpad gestures; data refreshes wait until the list rests.
+  property real wheelVelocity: 0
+  property double lastWheelTime: 0
+  property bool scrollBusy: false
+  property bool syncDeferred: false
+  function scrollActivity() {
+    scrollBusy = true
+    scrollIdle.restart()
+  }
+  Timer {
+    id: glideTimer
+    interval: 50
+    onTriggered: {
+      if (Math.abs(root.wheelVelocity) > 120) flick.flick(0, root.wheelVelocity)
+      root.wheelVelocity = 0
+    }
+  }
+  Timer {
+    id: scrollIdle
+    interval: 300
+    onTriggered: {
+      root.scrollBusy = flick.moving
+      if (!root.scrollBusy && root.syncDeferred) {
+        root.syncDeferred = false
+        root.syncTracked()
+      }
+    }
+  }
 
 
   // One agent process at a time keeps rapid edits in click order.
@@ -650,15 +680,35 @@ Panel {
         interactive: contentHeight > height
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
+        maximumFlickVelocity: 5000
+        onMovementStarted: root.scrollActivity()
+        onMovementEnded: scrollIdle.restart()
+
         WheelHandler {
           target: null
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
           onWheel: function(event) {
-            var delta = event.pixelDelta.y !== 0
-              ? event.pixelDelta.y * 1.8 : event.angleDelta.y / 120 * Style.space(140)
-            flick.contentY = Math.max(0, Math.min(flick.contentHeight - flick.height,
-              flick.contentY - delta))
             event.accepted = true
+            root.scrollActivity()
+            var now = Date.now()
+            var limit = Math.max(0, flick.contentHeight - flick.height)
+            if (event.pixelDelta.y !== 0) {
+              // Touchpad: follow the fingers 1:1, then glide on release like other apps.
+              scrollJump.stop()
+              flick.cancelFlick()
+              var elapsed = now - root.lastWheelTime
+              var instant = event.pixelDelta.y * 1000 / Math.max(8, Math.min(100, elapsed))
+              root.wheelVelocity = elapsed > 100 ? instant : root.wheelVelocity * 0.6 + instant * 0.4
+              root.lastWheelTime = now
+              flick.contentY = Math.max(0, Math.min(limit, flick.contentY - event.pixelDelta.y))
+              glideTimer.restart()
+            } else if (event.angleDelta.y !== 0) {
+              // Mouse wheel: animate each notch instead of jumping.
+              var from = scrollJump.running ? scrollJump.to : flick.contentY
+              scrollJump.stop()
+              scrollJump.to = Math.max(0, Math.min(limit, from - event.angleDelta.y / 120 * Style.space(120)))
+              scrollJump.restart()
+            }
           }
         }
 

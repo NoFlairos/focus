@@ -292,6 +292,12 @@ def current_hour_bucket(now: dt.datetime) -> str:
     return now.replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
 
 
+def clean_site_name(name: str) -> str:
+    """Drop parenthesised asides such as "X (formerly Twitter)" or "(3) Inbox"."""
+    cleaned = " ".join(re.sub(r"\([^()]*\)", " ", name).split()).strip(" -–—|·:")
+    return cleaned or " ".join(name.split())
+
+
 def format_duration(seconds: float) -> str:
     minutes = int(seconds // 60)
     return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
@@ -901,7 +907,7 @@ class Runtime:
                     if not isinstance(window, dict):
                         continue
                     domain = canonical_domain(str(window.get("domain", "")))
-                    name = " ".join(str(window.get("site_name", "")).split())[:120]
+                    name = clean_site_name(str(window.get("site_name", "")))[:120]
                     if domain and name and self.config["site_names"].get(domain) != name:
                         self.config["site_names"][domain] = name
                         names_changed = True
@@ -1391,7 +1397,7 @@ class Runtime:
             for row in rows:
                 if row["id"].startswith("site:"):
                     domain = row["id"][5:]
-                    row["name"] = self.config["site_names"].get(domain) or domain
+                    row["name"] = clean_site_name(self.config["site_names"].get(domain) or domain)
             rows.sort(key=lambda row: row["name"].lower())
             usage_today = self.store.target_today(day)
             for row in rows:
@@ -1407,7 +1413,7 @@ class Runtime:
             labels = {}
             for target_id in {member for row in rows for member in row["members"]} | set(self.config["ignored_targets"]):
                 saved = targets.get(target_id, {}).get("name", "")
-                labels[target_id] = (self.config["site_names"].get(target_id[5:]) if target_id.startswith("site:") else "") \
+                labels[target_id] = clean_site_name(self.config["site_names"].get(target_id[5:], "") if target_id.startswith("site:") else "") \
                     or target_display_name(target_id, saved)
             diagnostics = {"browser_connected": browser_active,
                            "browser_running": browser_running,

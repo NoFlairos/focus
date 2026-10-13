@@ -407,6 +407,15 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.config["dismissed_suggestions"], [])
         self.assertEqual(self.runtime.config["independent_targets"], ["site:kept.example"])
 
+    def test_site_names_drop_parenthesised_asides(self):
+        for raw, clean in (("X (formerly Twitter)", "X"), ("(3) Inbox", "Inbox"), ("Docs (Beta) - Editor", "Docs - Editor"),
+                           ("(beta)", "(beta)"), ("Plain", "Plain")):
+            self.assertEqual(agent.clean_site_name(raw), clean)
+        self.runtime.config["site_names"]["x.com"] = "X (formerly Twitter)"
+        self.runtime.handle_message({"op": "classify", "target_id": "site:x.com", "category": "consumption"})
+        self.runtime.tick(0)
+        self.assertEqual(next(r for r in self.runtime.latest_state["tracked"] if r["id"] == "site:x.com")["name"], "X")
+
     def test_state_has_labels_and_single_browser_status(self):
         self.runtime.handle_message({"op": "exclude", "target_id": "app:org.example.Mail"})
         self.runtime.tick(1)

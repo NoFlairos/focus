@@ -190,6 +190,25 @@ Item {
  focusPanel.commandQueue=[]
  focusPanel.manageSection=""
  }
+ function test_smooth_wheel_and_deferred_refresh() {
+ var previous = widget.snapshot
+ var many=[]
+ for(var i=0;i<25;i++) many.push({id:"app:wheel"+i,name:"Wheel "+i,category:"neutral",configured:true,members:["app:wheel"+i]})
+ widget.snapshot=Object.assign({},previous,{tracked:many})
+ focusPanel.page="manage"; focusPanel.manageSection="apps"; wait(50)
+ var scroll=findChild(focusPanel,"activityScroll")
+ scroll.contentY=0
+ mouseWheel(scroll, 100, 100, 0, -120)
+ verify(focusPanel.scrollBusy)
+ wait(30)
+ verify(scroll.contentY > 0 && scroll.contentY < 120)
+ tryVerify(function() { return scroll.contentY >= 119 }, 600)
+ widget.snapshot=Object.assign({},previous,{tracked:many.slice(0, 3)})
+ verify(focusPanel.syncDeferred)
+ tryVerify(function() { return !focusPanel.scrollBusy && !focusPanel.syncDeferred }, 1500)
+ widget.snapshot=previous
+ focusPanel.manageSection=""
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
