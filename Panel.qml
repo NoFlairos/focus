@@ -647,15 +647,13 @@ Panel {
   }
 
   function formatElapsed(seconds) {
-    seconds = Math.max(0, Number(seconds || 0))
-    if (seconds < 3600) return Math.floor(seconds / 60) + "m "
-      + String(Math.floor(seconds % 60)).padStart(2, "0") + "s"
-    return Math.floor(seconds / 3600) + "h "
-      + String(Math.floor(seconds % 3600 / 60)).padStart(2, "0") + "m"
+    return minutes(Math.floor(Math.max(0, Number(seconds || 0)) / 60))
   }
 
+  // Minutes as "45m" or "2h 09m": one duration style everywhere, no seconds.
   function minutes(value) {
-    return Math.round(Number(value || 0)) + "m"
+    var total = Math.round(Number(value || 0))
+    return total >= 60 ? Math.floor(total / 60) + "h " + String(total % 60).padStart(2, "0") + "m" : total + "m"
   }
 
   // Names come ready from the agent; members and exclusions use its label map.
@@ -769,8 +767,17 @@ Panel {
             Row {
               width: parent.width
               spacing: Style.space(6)
+              FocusMark {
+                anchors.verticalCenter: parent.verticalCenter
+                size: Math.round(Style.font.heading * 0.8)
+                color: root.textColor
+                accent: Color.accent
+                active: root.working || root.focusActive
+                session: root.focusActive
+                opacity: active ? 1 : 0.55
+              }
               Text {
-                width: parent.width - focusButton.width - pauseButton.width - parent.spacing * 2
+                width: parent.width - focusButton.width - pauseButton.width - Math.round(Style.font.heading * 0.8) - parent.spacing * 3
                 text: "Focus"
                 textFormat: Text.PlainText
                 color: root.textColor
@@ -1368,7 +1375,8 @@ Panel {
                           + (targetCard.targetId.startsWith("site:")
                             && targetCard.label.toLowerCase() !== targetCard.targetId.slice(5).toLowerCase()
                             ? targetCard.targetId.slice(5) + "  ·  " : "")
-                          + (targetGroup.todaySeconds > 0 ? root.formatElapsed(targetGroup.todaySeconds) + " today" : "Not used today")
+                          + (targetGroup.todaySeconds >= 60 ? root.minutes(targetGroup.todaySeconds / 60) + " today"
+                            : targetGroup.todaySeconds > 0 ? "Under a minute today" : "Not used today")
                           + (targetGroup.linked ? "  ·  " + targetGroup.members.length + " linked" : "")
                         textFormat: Text.PlainText
                         color: root.mutedText
@@ -1639,7 +1647,7 @@ Panel {
                 }
                 Text {
                   width: parent.width
-                  text: root.page === "review" ? "New apps and sites will appear here."
+                  text: root.page === "review" ? "Apps and sites used 10 minutes this week appear here."
                     : root.page === "manage" ? "Choose a role in Now or Review to save an app."
                     : root.working ? "Apps on displayed workspaces appear here while they are open."
                     : root.paused ? "Limits are paused too."

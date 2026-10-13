@@ -27,7 +27,7 @@ QtObject {property string path; property bool watchChanges; property bool printE
 QtObject {property var command: []; property bool running: false; signal exited(int exitCode)}''')})
 module('qs.Commons',{
 'Style':(True,'''import QtQuick
-QtObject { property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
+QtObject { property var bar: ({iconFont: 13, iconSlot: 27}); property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
 'Color':(True,'''import QtQuick
 QtObject { property color accent: "#7aa2f7"; property var popups: ({text: Qt.rgba(0.9,0.9,0.9,1), background: Qt.rgba(0.12,0.12,0.12,1)}) }''')})
 module('qs.Ui',{
@@ -53,6 +53,7 @@ Item { signal closeRequested(); signal tabRequested(int direction); }''')})
 shutil.copyfile('Panel.qml',root/'FocusPanel.qml')
 shutil.copyfile('Panel.qml',root/'Panel.qml')
 shutil.copyfile('BarWidget.qml',root/'FocusBar.qml')
+shutil.copyfile('FocusMark.qml',root/'FocusMark.qml')
 (root/'tst_panel.qml').write_text('''import QtQuick
 import QtTest
 Item {
@@ -109,7 +110,7 @@ Item {
  verify(logo !== null && logo.visible && logo.active && !logo.session)
  focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, paused:true, tracked:[]}
  verify(!logo.active)
- compare(logo.opacity, 0.5)
+ compare(logo.opacity, 0.55)
  focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, focus_until:now/1000 + 600, tracked:[]}
  verify(logo.session && logo.active)
  focusBar.snapshot = {working:true, tracked:[{id:"app:x",name:"X",visible_windows:1,category:"neutral"}]}

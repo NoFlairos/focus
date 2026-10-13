@@ -23,7 +23,7 @@ cd focus
 
 plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.noflairos.focus-ratio"
 mkdir -p "$plugin_dir"
-install -m 0644 manifest.json BarWidget.qml Panel.qml "$plugin_dir/"
+install -m 0644 manifest.json BarWidget.qml Panel.qml FocusMark.qml "$plugin_dir/"
 omarchy plugin enable io.github.noflairos.focus-ratio
 omarchy restart shell
 ```
