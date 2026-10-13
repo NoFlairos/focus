@@ -29,7 +29,7 @@ module('qs.Commons',{
 'Style':(True,'''import QtQuick
 QtObject { property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
 'Color':(True,'''import QtQuick
-QtObject { property var popups: ({text: Qt.rgba(0.9,0.9,0.9,1), background: Qt.rgba(0.12,0.12,0.12,1)}) }''')})
+QtObject { property color accent: "#7aa2f7"; property var popups: ({text: Qt.rgba(0.9,0.9,0.9,1), background: Qt.rgba(0.12,0.12,0.12,1)}) }''')})
 module('qs.Ui',{
 'BarWidget':(False,'''import QtQuick
 Item {property string moduleName; property var bar: null;}'''),
@@ -100,6 +100,21 @@ Item {
  focusBar.snapshot = online
  compare(focusBar.connectionIssue, "")
  verify(!indicator.visible)
+ }
+ function test_bar_logo_states() {
+ var now = Date.now()
+ focusBar.statusNow = now
+ focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, paused:false, tracked:[]}
+ var logo = findChild(focusBar, "focusLogo")
+ verify(logo !== null && logo.visible && logo.active && !logo.session)
+ focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, paused:true, tracked:[]}
+ verify(!logo.active)
+ compare(logo.opacity, 0.5)
+ focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, focus_until:now/1000 + 600, tracked:[]}
+ verify(logo.session && logo.active)
+ focusBar.snapshot = {working:true, tracked:[{id:"app:x",name:"X",visible_windows:1,category:"neutral"}]}
+ verify(!logo.visible)
+ focusBar.snapshot = {tracked:[]}
  }
  function test_untrusted_labels_stay_literal() {
  var markup = '<img src="http://127.0.0.1:PROBE_PORT/label.png"><b>Untrusted site</b>'
@@ -193,7 +208,7 @@ Item {
  function test_smooth_wheel_and_deferred_refresh() {
  var previous = widget.snapshot
  var many=[]
- for(var i=0;i<25;i++) many.push({id:"app:wheel"+i,name:"Wheel "+i,category:"neutral",configured:true,members:["app:wheel"+i]})
+ for(var i=0;i<60;i++) many.push({id:"app:wheel"+i,name:"Wheel "+i,category:"neutral",configured:true,members:["app:wheel"+i]})
  widget.snapshot=Object.assign({},previous,{tracked:many})
  focusPanel.page="manage"; focusPanel.manageSection="apps"; wait(50)
  var scroll=findChild(focusPanel,"activityScroll")
@@ -203,6 +218,13 @@ Item {
  wait(30)
  verify(scroll.contentY > 0 && scroll.contentY < 120)
  tryVerify(function() { return scroll.contentY >= 119 }, 600)
+ var glide=findChild(focusPanel,"touchpadGlide")
+ scroll.contentY=0
+ glide.begin(-2000)
+ tryVerify(function() { return !glide.running }, 3000)
+ // Chromium's curve from 2000 px/s travels about 420 px in 0.7 s.
+ verify(scroll.contentY > 400 && scroll.contentY < 620, "glide distance " + scroll.contentY)
+ focusPanel.scrollActivity()
  widget.snapshot=Object.assign({},previous,{tracked:many.slice(0, 3)})
  verify(focusPanel.syncDeferred)
  tryVerify(function() { return !focusPanel.scrollBusy && !focusPanel.syncDeferred }, 1500)

@@ -445,8 +445,44 @@ Panel {
     id: glideTimer
     interval: 50
     onTriggered: {
-      if (Math.abs(root.wheelVelocity) > 120) flick.flick(0, root.wheelVelocity)
+      if (Math.abs(root.wheelVelocity) > 200) glide.begin(root.wheelVelocity)
       root.wheelVelocity = 0
+    }
+  }
+  // Chromium's desktop fling curve (ui/events/gestures/fling_curve.cc):
+  // position(t) = a·e^(−γt) − β·t − a, with a = −5707.62, β = 172, γ = 3.7.
+  Timer {
+    id: glide
+    objectName: "touchpadGlide"
+    property real direction: 1
+    property real startTime: 0
+    property real elapsed: 0
+    property real endTime: 0
+    property real startY: 0
+    readonly property real alpha: -5707.62
+    readonly property real beta: 172
+    readonly property real gamma: 3.7
+    function position(t) { return alpha * Math.exp(-gamma * t) - beta * t - alpha }
+    function timeAtVelocity(v) { return -Math.log((v + beta) / (-alpha * gamma)) / gamma }
+    function begin(velocity) {
+      var speed = Math.min(Math.abs(velocity), -alpha * gamma - beta)
+      direction = velocity > 0 ? -1 : 1
+      startTime = Math.max(0, timeAtVelocity(speed))
+      endTime = timeAtVelocity(0)
+      startY = flick.contentY
+      elapsed = 0
+      restart()
+    }
+    interval: 16
+    repeat: true
+    onTriggered: {
+      elapsed += interval / 1000
+      var t = Math.min(endTime, startTime + elapsed)
+      var limit = Math.max(0, flick.contentHeight - flick.height)
+      var y = startY + direction * (position(t) - position(startTime))
+      flick.contentY = Math.max(0, Math.min(limit, y))
+      root.scrollActivity()
+      if (t >= endTime || y <= 0 || y >= limit) stop()
     }
   }
   Timer {
@@ -680,33 +716,41 @@ Panel {
         interactive: contentHeight > height
         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-        maximumFlickVelocity: 5000
-        onMovementStarted: root.scrollActivity()
+        onMovementStarted: { glide.stop(); root.scrollActivity() }
         onMovementEnded: scrollIdle.restart()
 
         WheelHandler {
           target: null
           acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+          // Calibrated on Chromium (ui/ozone wayland_pointer.cc): both touchpad and wheel
+          // use Wayland's 10 units per notch scaled to 120, i.e. Qt's angleDelta, as pixels.
           onWheel: function(event) {
             event.accepted = true
             root.scrollActivity()
             var now = Date.now()
             var limit = Math.max(0, flick.contentHeight - flick.height)
+            var delta = event.angleDelta.y
+            if (delta === 0) return
             if (event.pixelDelta.y !== 0) {
-              // Touchpad: follow the fingers 1:1, then glide on release like other apps.
+              // Touchpad: follow the fingers, then glide on Chromium's fling curve.
               scrollJump.stop()
+              glide.stop()
               flick.cancelFlick()
               var elapsed = now - root.lastWheelTime
-              var instant = event.pixelDelta.y * 1000 / Math.max(8, Math.min(100, elapsed))
+              var instant = delta * 1000 / Math.max(8, Math.min(100, elapsed))
               root.wheelVelocity = elapsed > 100 ? instant : root.wheelVelocity * 0.6 + instant * 0.4
               root.lastWheelTime = now
-              flick.contentY = Math.max(0, Math.min(limit, flick.contentY - event.pixelDelta.y))
+              flick.contentY = Math.max(0, Math.min(limit, flick.contentY - delta))
               glideTimer.restart()
-            } else if (event.angleDelta.y !== 0) {
-              // Mouse wheel: animate each notch instead of jumping.
+            } else {
+              // Mouse wheel: 120 px per notch, animated like Chromium (200 ms, shorter for long jumps).
+              glide.stop()
               var from = scrollJump.running ? scrollJump.to : flick.contentY
+              var to = Math.max(0, Math.min(limit, from - delta))
+              var distance = Math.abs(to - flick.contentY)
               scrollJump.stop()
-              scrollJump.to = Math.max(0, Math.min(limit, from - event.angleDelta.y / 120 * Style.space(120)))
+              scrollJump.duration = 200 - 100 * Math.max(0, Math.min(1, (distance - 120) / 360))
+              scrollJump.to = to
               scrollJump.restart()
             }
           }
@@ -1975,6 +2019,8 @@ Panel {
               root.finishScheduleEditing()
               flick.cancelFlick()
               scrollJump.stop()
+              glide.stop()
+              scrollJump.duration = 180
               scrollJump.to = modelData.bottom ? Math.max(0, flick.contentHeight - flick.height) : 0
               scrollJump.restart()
             }

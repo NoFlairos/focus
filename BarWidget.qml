@@ -241,13 +241,52 @@ BarWidget {
           }
         }
 
-        Text {
+        // Focus mark (viewfinder + dot) when no tracked app is visible.
+        // Dot: filled while tracking, hollow and dimmed when off, accent during a focus session.
+        Item {
+          id: logo
+          objectName: "focusLogo"
+          readonly property bool session: root.focusUntil > root.statusNow
+          readonly property bool active: session || (root.snapshot.working === true && root.snapshot.paused !== true)
+          readonly property int stroke: Math.max(1, Math.round(size / 8))
+          readonly property int arm: Math.round(size * 0.32)
+          readonly property int size: Math.round(button.fontSize * 1.15)
           visible: root.visibleTargets.length === 0
-          text: "FOCUS"
-          color: button.foreground
-          font.family: button.fontFamily
-          font.pixelSize: button.fontSize
-          font.bold: true
+          anchors.verticalCenter: parent.verticalCenter
+          width: size
+          height: size
+          opacity: active ? 1 : 0.5
+          Repeater {
+            model: [[0, 0], [1, 0], [0, 1], [1, 1]]
+            delegate: Item {
+              required property var modelData
+              anchors.fill: parent
+              Rectangle {
+                x: modelData[0] ? logo.size - logo.arm : 0
+                y: modelData[1] ? logo.size - logo.stroke : 0
+                width: logo.arm
+                height: logo.stroke
+                color: button.foreground
+              }
+              Rectangle {
+                x: modelData[0] ? logo.size - logo.stroke : 0
+                y: modelData[1] ? logo.size - logo.arm : 0
+                width: logo.stroke
+                height: logo.arm
+                color: button.foreground
+              }
+            }
+          }
+          Rectangle {
+            readonly property int diameter: Math.round(logo.size * 0.36) | 1
+            anchors.centerIn: parent
+            width: diameter
+            height: diameter
+            radius: diameter / 2
+            color: logo.session ? Color.accent : logo.active ? button.foreground : "transparent"
+            border.width: logo.active ? 0 : logo.stroke
+            border.color: button.foreground
+          }
         }
       }
     }
