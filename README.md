@@ -53,7 +53,8 @@ Defaults: weekdays 08:00–17:00, 10 minutes/hour for Consumption. Each entry's
 limit is **per hour** (resets at each clock hour) or **per day**; the default action
 **closes the window or active tab**. Choose Notify or Keep open under **More**.
 
-- **5 more minutes:** once per limit period, from the limit notification or the entry.
+- **5 more minutes:** once per limit period, from the limit notification (stays until
+  you choose) or from Now for two minutes after the limit is reached.
 - **Daily Consumption budget:** one cap for all Consumption together (Apps & sites).
 - **Focus session:** 25, 50 or 90 minutes blocking all Consumption, even outside
   the schedule. Ending or pausing stops it.

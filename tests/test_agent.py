@@ -342,6 +342,24 @@ class AgentTests(unittest.TestCase):
         threads[-1]()
         self.assertEqual(self.runtime.config["snoozes"][target], agent.current_hour_bucket(dt.datetime.now().astimezone()))
 
+    def test_limit_prompt_offers_snooze_briefly_after_closing(self):
+        target = "app:test"
+        self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
+        self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
+        self.runtime.tick(61)
+        command = agent.subprocess.Popen.call_args.args[0]
+        self.assertIn("critical", command)
+        self.clients = []
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["limit_prompts"], [{"id": target, "name": "Test"}])
+        self.runtime.limit_prompts[target] -= agent.LIMIT_PROMPT_SECONDS
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["limit_prompts"], [])
+        self.runtime.limit_prompts[target] = time.monotonic()
+        self.runtime.handle_message({"op": "snooze", "target_id": target})
+        self.runtime.tick(0)
+        self.assertEqual(self.runtime.latest_state["limit_prompts"], [])
+
     def test_focus_session_blocks_consumption_and_overrides_pause_and_schedule(self):
         target = "app:test"
         self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})

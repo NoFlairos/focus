@@ -232,6 +232,22 @@ Item {
  widget.snapshot=previous
  focusPanel.manageSection=""
  }
+ function test_limit_prompt_snooze() {
+ var previous = widget.snapshot
+ focusPanel.page="now"
+ widget.snapshot = Object.assign({}, previous, {limit_prompts:[{id:"site:one.example",name:"One"}]})
+ wait(30)
+ var block = findChild(focusPanel, "limitPrompts")
+ verify(block.visible)
+ findChild(focusPanel, "promptSnoozeButton").clicked()
+ compare(focusPanel.commandQueue[0][0], "snooze")
+ compare(focusPanel.commandQueue[0][1], "site:one.example")
+ verify(!block.visible)
+ widget.snapshot = previous
+ verify(!block.visible)
+ focusPanel.commandQueue=[]; focusPanel.snoozedPrompts=[]
+ focusPanel.page="manage"
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)

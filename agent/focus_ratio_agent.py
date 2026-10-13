@@ -35,6 +35,7 @@ CATEGORIES = {"productive", "neutral", "consumption"}
 LIMIT_ACTIONS = {"close", "notify", "keep_open"}
 LIMIT_PERIODS = {"hour": 120, "day": 720}  # period -> maximum quota in minutes
 SNOOZE_SECONDS = 300
+LIMIT_PROMPT_SECONDS = 120  # how long Now offers "5 more minutes" after a limit closes something
 FOCUS_SESSION_MINUTES = {"25", "50", "90"}
 MAX_DAILY_BUDGET_MINUTES = 720
 IGNORED_APP_IDS: set[str] = set()
@@ -573,6 +574,7 @@ class Runtime:
         self.warned_limits: set[tuple[str, str]] = set()
         self.last_data_action: dict[str, Any] = {}
         self.notified_limits: set[tuple[str, str]] = set()
+        self.limit_prompts: dict[str, float] = {}
         self.latest_state: dict[str, Any] = {"tracked": [], "today": {}, "history": []}
         self.written_state = ""
         self.written_at = 0.0
@@ -618,7 +620,8 @@ class Runtime:
         """Desktop notification; a limit notification offers one 5-minute extension."""
         command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, body]
         if snooze_target:
-            command += ["-A", "snooze=5 more minutes"]
+            # Critical is the only urgency Omarchy keeps on screen until the user acts.
+            command += ["-u", "critical", "-A", "snooze=5 more minutes"]
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE if snooze_target else subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, text=True)
@@ -1369,6 +1372,8 @@ class Runtime:
                                      "budget": "Daily consumption budget reached"}.get(status["reason"], "Time limit reached · " + name)
                             body = name + (" closed." if action == "close" else " stays open.")
                             self.notify(title, body, target_id if status["can_snooze"] else "")
+                            if status["can_snooze"]:
+                                self.limit_prompts[target_id] = time.monotonic()
                 row.update({"visible_windows": len(clients),
                             "focused": any(client.get("address") == focused_address for client in clients) and bool(focused_address)})
                 rows.append(row)
@@ -1428,6 +1433,13 @@ class Runtime:
                 ("reload_extension" if diagnostics["browser_can_close_tabs"] is False else "connected") if browser_active
                 else "browser_closed" if not browser_running
                 else "browser_offline" if browser_connection_expected else "connecting")
+            # Entries just stopped by a limit stay offered in Now for a short while,
+            # even once their window or tab is closed.
+            rows_by_id = {row["id"]: row for row in rows}
+            self.limit_prompts = {key: when for key, when in self.limit_prompts.items()
+                                  if time.monotonic() - when < LIMIT_PROMPT_SECONDS
+                                  and rows_by_id.get(key, {}).get("can_snooze")}
+            limit_prompts = [{"id": key, "name": rows_by_id[key]["name"]} for key in sorted(self.limit_prompts)]
             history = self.store.history(14)
             today = dict(history[-1]) if history and history[-1]["day"] == day else {"day": day}
             self.latest_state = {
@@ -1438,6 +1450,7 @@ class Runtime:
                 "budget_used_seconds": int(self.store.consumption_today(day)),
                 "weekly_summary_enabled": self.config["weekly_summary"],
                 "labels": labels,
+                "limit_prompts": limit_prompts,
                 "working": in_schedule,
                 "paused": self.paused,
                 "pause_until": self.pause_until,

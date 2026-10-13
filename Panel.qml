@@ -312,6 +312,7 @@ Panel {
   property var pendingQuotas: ({})
   property var pendingLimitActions: ({})
   property var pendingLimitPeriods: ({})
+  property var snoozedPrompts: []
   property var commandQueue: []
 
   function modelRow(row) {
@@ -517,6 +518,7 @@ Panel {
       root.pendingQuotas = ({})
       root.pendingLimitActions = ({})
       root.pendingLimitPeriods = ({})
+      root.snoozedPrompts = []
     }
   }
 
@@ -1241,6 +1243,73 @@ Panel {
                 text: "No matching entries"
                 color: root.mutedText
                 font.pixelSize: Style.font.caption
+              }
+            }
+
+            // Just stopped by a limit: one tap for five more minutes, offered for two minutes.
+            Rectangle {
+              objectName: "limitPrompts"
+              readonly property var prompts: (root.snapshot.limit_prompts || []).filter(function(entry) {
+                return root.snoozedPrompts.indexOf(entry.id) < 0
+              })
+              visible: root.page === "now" && prompts.length > 0
+              width: parent.width
+              implicitHeight: promptColumn.implicitHeight + Style.space(18)
+              radius: Style.cornerRadius
+              color: root.softSurface
+              border.width: Style.spacing.hairline
+              border.color: root.consumptionColor
+
+              Column {
+                id: promptColumn
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Style.space(9)
+                spacing: Style.space(6)
+                Text {
+                  text: "LIMIT REACHED"
+                  color: root.consumptionColor
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+                Repeater {
+                  model: parent.parent.prompts
+                  delegate: Row {
+                    required property var modelData
+                    width: promptColumn.width
+                    height: Style.space(30)
+                    spacing: Style.space(8)
+                    Text {
+                      width: parent.width - promptButton.width - parent.spacing
+                      height: parent.height
+                      text: modelData.name
+                      textFormat: Text.PlainText
+                      color: root.textColor
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      elide: Text.ElideRight
+                      verticalAlignment: Text.AlignVCenter
+                    }
+                    Omarchy.Button {
+                      id: promptButton
+                      objectName: "promptSnoozeButton"
+                      height: parent.height
+                      text: "5 more minutes"
+                      foreground: root.textColor
+                      fontSize: Style.font.bodySmall
+                      bordered: true
+                      focusable: true
+                      enabled: root.serviceConnected
+                      onClicked: {
+                        // Hiding the entry destroys this delegate, so send the command first.
+                        var id = modelData.id
+                        root.runAgent(["snooze", id])
+                        root.snoozedPrompts = root.snoozedPrompts.concat([id])
+                      }
+                    }
+                  }
+                }
               }
             }
 
