@@ -35,6 +35,8 @@ CATEGORIES = {"productive", "neutral", "consumption"}
 LIMIT_ACTIONS = {"close", "notify", "keep_open"}
 LIMIT_PERIODS = {"hour": 120, "day": 720}  # period -> maximum quota in minutes
 SNOOZE_SECONDS = 300
+MAX_DAY_START_HOUR = 6  # a "day" may end up to 06:00 so late evenings count as the evening before
+SUGGEST_LIMIT_SECONDS = 3 * 3600  # weekly use that makes an unlimited entry worth a limit
 LIMIT_PROMPT_SECONDS = 120  # how long Now offers "5 more minutes" after a limit closes something
 FOCUS_SESSION_MINUTES = {"25", "50", "90"}
 MAX_DAILY_BUDGET_MINUTES = 720
@@ -136,6 +138,8 @@ def default_config() -> dict[str, Any]:
         "weekly_summary": True,
         "last_weekly_summary": "",
         "daily_budget_minutes": 0,
+        "day_start_hour": 4,
+        "dismissed_limit_suggestions": {},
         "snoozes": {},
         "focus_session": {"until": None},
         "dismissed_suggestions": [],
@@ -481,6 +485,24 @@ class Store:
         row = self.db.execute(query, args).fetchone()
         return float(row[0] or 0)
 
+    def usage_by_target(self, start: str, end: str) -> dict[str, dict[str, float]]:
+        """Seconds per target and category between two days, inclusive."""
+        result: dict[str, dict[str, float]] = {}
+        for target_id, category, seconds in self.db.execute("""SELECT target_id, category, SUM(seconds) FROM daily_usage
+                WHERE day>=? AND day<=? GROUP BY target_id, category""", (start, end)):
+            result.setdefault(str(target_id), {})[str(category)] = float(seconds)
+        return result
+
+    def day_breakdown(self, start: str, top: int = 8) -> dict[str, list[tuple[str, str, float]]]:
+        """Largest entries per day since `start`: (target, main category, seconds)."""
+        days: dict[str, dict[str, dict[str, float]]] = {}
+        for day, target_id, category, seconds in self.db.execute("""SELECT day, target_id, category, SUM(seconds)
+                FROM daily_usage WHERE day>=? GROUP BY day, target_id, category""", (start,)):
+            days.setdefault(day, {}).setdefault(target_id, {})[category] = float(seconds)
+        return {day: sorted(((target, max(cats, key=cats.get), sum(cats.values())) for target, cats in targets.items()),
+                            key=lambda item: -item[2])[:top]
+                for day, targets in days.items()}
+
     def target_today(self, day: str) -> dict[str, float]:
         rows = self.db.execute("SELECT target_id, SUM(seconds) FROM daily_usage WHERE day=? GROUP BY target_id", (day,)).fetchall()
         return {target_id: float(seconds) for target_id, seconds in rows}
@@ -586,6 +608,31 @@ class Runtime:
             self.config["pause_state"] = {"active": False, "until": None}
             save_config(self.config)
 
+    def tracking_date(self, now: dt.datetime) -> dt.date:
+        """Calendar date of the tracking day; hours before day_start_hour belong to the previous day."""
+        return (now - dt.timedelta(hours=int(self.config["day_start_hour"]))).date()
+
+    def limit_suggestions(self, today: dt.date) -> list[dict[str, Any]]:
+        """Heavily used entries without an enforced limit, with a daily limit to propose."""
+        start = (today - dt.timedelta(days=6)).isoformat()
+        week = "%d-W%02d" % today.isocalendar()[:2]
+        usage = self.store.usage_by_target(start, today.isoformat())
+        suggestions = []
+        for target_id, target in self.config["targets"].items():
+            category, action = target.get("category"), target.get("limit_action", "close")
+            unlimited = category == "neutral" or (category == "consumption" and action == "keep_open")
+            total = sum(usage.get(target_id, {}).values())
+            # The browser itself only hosts sites; its sites get their own suggestions.
+            if (not unlimited or total < SUGGEST_LIMIT_SECONDS or target_id in self.config["ignored_targets"]
+                    or target_id[4:] in BROWSER_APP_IDS
+                    or self.config["dismissed_limit_suggestions"].get(target_id) == week):
+                continue
+            # A quarter below the current daily average, in 15-minute steps.
+            minutes = max(15, min(MAX_DAILY_BUDGET_MINUTES, int(total / 7 / 60 * 0.75) // 15 * 15))
+            suggestions.append({"id": target_id, "name": target_display_name(target_id, target.get("name", "")),
+                                "week_seconds": int(total), "daily_minutes": minutes})
+        return sorted(suggestions, key=lambda item: -item["week_seconds"])[:3]
+
     def focus_until(self, now: dt.datetime) -> float | None:
         until = self.config["focus_session"].get("until")
         return until if until and now.timestamp() < until else None
@@ -597,7 +644,7 @@ class Runtime:
             return None
         period = target.get("limit_period", "hour")
         period = period if period in LIMIT_PERIODS else "hour"
-        day = now.date().isoformat()
+        day = self.tracking_date(now).isoformat()
         key = current_hour_bucket(now) if period == "hour" else "day:" + day
         quota = int(target.get("quota_minutes", self.config["default_quota_minutes"])) * 60
         used = (self.store.used_this_hour(target_id, key) if period == "hour"
@@ -643,12 +690,13 @@ class Runtime:
 
     def weekly_report(self, now: dt.datetime) -> None:
         """Once per ISO week, summarise the previous week if it has recorded screen time."""
-        week = "%d-W%02d" % now.isocalendar()[:2]
+        today = self.tracking_date(now)
+        week = "%d-W%02d" % today.isocalendar()[:2]
         if not self.config["weekly_summary"] or self.config["last_weekly_summary"] == week:
             return
         self.config["last_weekly_summary"] = week
         save_config(self.config)
-        monday = now.date() - dt.timedelta(days=now.weekday())
+        monday = today - dt.timedelta(days=today.weekday())
         history = {row["day"]: row for row in self.store.history(21)}
 
         def totals(start: dt.date) -> tuple[int, int, float]:
@@ -1074,6 +1122,33 @@ class Runtime:
                 self.config["daily_budget_minutes"] = minutes
                 save_config(self.config)
                 return {"ok": True}
+            if op == "set_day_start":
+                try:
+                    hour = int(message.get("hour"))
+                except (TypeError, ValueError):
+                    return {"ok": False, "error": "hour must be a number"}
+                if not 0 <= hour <= MAX_DAY_START_HOUR:
+                    return {"ok": False, "error": "day start must be 0–6"}
+                self.config["day_start_hour"] = hour
+                save_config(self.config)
+                return {"ok": True}
+            if op in ("apply_limit_suggestion", "dismiss_limit_suggestion"):
+                target_id = self.resolve_target_id(str(message.get("target_id", "")))
+                now = dt.datetime.now().astimezone()
+                suggestion = next((item for item in self.limit_suggestions(self.tracking_date(now))
+                                   if item["id"] == target_id), None)
+                if not suggestion:
+                    return {"ok": False, "error": "no limit suggestion for this entry"}
+                if op == "dismiss_limit_suggestion":
+                    self.config["dismissed_limit_suggestions"][target_id] = "%d-W%02d" % self.tracking_date(now).isocalendar()[:2]
+                else:
+                    target = self.config["targets"][target_id]
+                    if target.get("limit_action") == "keep_open":
+                        target["limit_action"] = "notify"
+                    target.update({"category": "consumption", "limit_period": "day",
+                                   "quota_minutes": suggestion["daily_minutes"]})
+                save_config(self.config)
+                return {"ok": True}
             if op == "set_weekly_summary":
                 self.config["weekly_summary"] = bool(message.get("enabled"))
                 save_config(self.config)
@@ -1307,10 +1382,10 @@ class Runtime:
             self.reconcile_targets({"app:" + client["app_id"].casefold() for client in app_clients})
             ignored_targets = set(self.config["ignored_targets"])
             bucket = current_hour_bucket(now)
-            current = (bucket, "day:" + now.date().isoformat(), "focus:%s" % self.focus_until(now))
+            current = (bucket, "day:" + self.tracking_date(now).isoformat(), "focus:%s" % self.focus_until(now))
             self.notified_limits = {item for item in self.notified_limits if item[1].startswith(current)}
             self.warned_limits = {item for item in self.warned_limits if item[1].startswith(current)}
-            day = now.date().isoformat()
+            day = self.tracking_date(now).isoformat()
             if self.store.last_pruned_day != now.date():
                 self.store.prune(now)
                 self.prune_config()
@@ -1455,7 +1530,16 @@ class Runtime:
                 "paused": self.paused,
                 "pause_until": self.pause_until,
                 "warn_before_limit": self.config["warn_before_limit"],
-                "weekly": self.weekly_summary(history, now.date()),
+                "weekly": self.weekly_summary(history, self.tracking_date(now)),
+                "day_start_hour": self.config["day_start_hour"],
+                "limit_suggestions": self.limit_suggestions(self.tracking_date(now)),
+                "day_details": {
+                    day_key: [{"id": target_id, "name": labels.get(target_id) or target_display_name(
+                                   target_id, targets.get(target_id, {}).get("name", "")),
+                               "category": category, "seconds": int(seconds)}
+                              for target_id, category, seconds in entries]
+                    for day_key, entries in self.store.day_breakdown(
+                        (self.tracking_date(now) - dt.timedelta(days=6)).isoformat()).items()},
                 "suggestions": self.group_suggestions(rows),
                 "subdomain_rules": self.config["subdomain_rules"],
                 "data_action": self.last_data_action,
@@ -1578,7 +1662,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Focus local tracking service")
     parser.add_argument("--daemon", action="store_true", help="run the local tracker")
     parser.add_argument("--native-host", action="store_true", help="run the Chromium native messaging bridge")
-    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "snooze", "focus", "budget",
+    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "snooze", "focus", "budget", "day-start", "limit-suggestion",
                                                          "weekly-summary", "limit-period"])
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
@@ -1615,6 +1699,10 @@ def main() -> int:
                                       "duration": value if value in {"15", "60", "tomorrow"} else "manual"})
         elif args.operation == "snooze" and len(args.arguments) == 1:
             response = request_agent({"op": "snooze", "target_id": args.arguments[0]})
+        elif args.operation == "day-start" and len(args.arguments) == 1:
+            response = request_agent({"op": "set_day_start", "hour": args.arguments[0]})
+        elif args.operation == "limit-suggestion" and len(args.arguments) == 2 and args.arguments[1] in ("apply", "dismiss"):
+            response = request_agent({"op": args.arguments[1] + "_limit_suggestion", "target_id": args.arguments[0]})
         elif args.operation == "focus" and len(args.arguments) == 1:
             response = request_agent({"op": "focus", "minutes": args.arguments[0]})
         elif args.operation == "budget" and len(args.arguments) == 1:

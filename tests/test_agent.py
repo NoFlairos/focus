@@ -46,6 +46,8 @@ class AgentTests(unittest.TestCase):
             self.addCleanup(patcher.stop)
         self.runtime = agent.Runtime()
         self.addCleanup(lambda: self.runtime.store.db.close())
+        # Calendar days in tests; the late-night shift has its own test.
+        self.runtime.config["day_start_hour"] = 0
         self.closed = []
         # Applies to every Runtime a test creates, including after simulated restarts.
         closer = mock.patch.object(agent.Runtime, "close_app_windows", lambda runtime, clients: self.closed.extend(clients))
@@ -359,6 +361,46 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "snooze", "target_id": target})
         self.runtime.tick(0)
         self.assertEqual(self.runtime.latest_state["limit_prompts"], [])
+
+    def test_day_start_hour_moves_late_night_to_previous_day(self):
+        self.assertFalse(self.runtime.handle_message({"op": "set_day_start", "hour": 9})["ok"])
+        self.assertTrue(self.runtime.handle_message({"op": "set_day_start", "hour": 4})["ok"])
+        late = dt.datetime(2026, 10, 14, 2, 30).astimezone()
+        self.assertEqual(self.runtime.tracking_date(late), dt.date(2026, 10, 13))
+        self.assertEqual(self.runtime.tracking_date(late.replace(hour=4)), dt.date(2026, 10, 14))
+        target = {"category": "consumption", "limit_period": "day", "quota_minutes": 30}
+        self.runtime.store.add_times({"app:test": "consumption"}, 600, "old", "2026-10-13")
+        status = self.runtime.limit_status("app:test", target, late)
+        self.assertEqual((status["used"], status["period_key"]), (600, "day:2026-10-13"))
+
+    def test_day_details_list_top_entries_per_day(self):
+        self.consume("app:test", 600, "productive")
+        self.consume("app:test", 60, "neutral")
+        self.consume("site:video.example", 900)
+        self.clients = []
+        self.runtime.tick(0)
+        details = self.runtime.latest_state["day_details"][dt.date.today().isoformat()]
+        self.assertEqual([(row["id"], row["category"], row["seconds"]) for row in details],
+                         [("site:video.example", "consumption", 900), ("app:test", "productive", 660)])
+
+    def test_limit_suggestions_for_heavy_unlimited_entries(self):
+        for target, category in (("app:heavy", "neutral"), ("app:light", "neutral"), ("app:work", "productive"),
+                                 ("app:chromium", "neutral")):
+            self.runtime.handle_message({"op": "classify", "target_id": target, "category": category})
+            self.consume(target, 4 * 3600 if target != "app:light" else 3600, category)
+        self.runtime.handle_message({"op": "classify", "target_id": "app:video", "category": "consumption"})
+        self.runtime.handle_message({"op": "set_limit_action", "target_id": "app:video", "action": "keep_open"})
+        self.consume("app:video", 7 * 3600)
+        suggestions = self.runtime.limit_suggestions(dt.date.today())
+        self.assertEqual([item["id"] for item in suggestions], ["app:video", "app:heavy"])
+        self.assertEqual(suggestions[1]["daily_minutes"], 15)
+        self.assertEqual(suggestions[0]["daily_minutes"], 45)
+        self.assertTrue(self.runtime.handle_message({"op": "apply_limit_suggestion", "target_id": "app:video"})["ok"])
+        video = self.runtime.config["targets"]["app:video"]
+        self.assertEqual((video["limit_period"], video["quota_minutes"], video["limit_action"]), ("day", 45, "notify"))
+        self.assertTrue(self.runtime.handle_message({"op": "dismiss_limit_suggestion", "target_id": "app:heavy"})["ok"])
+        self.assertEqual(self.runtime.limit_suggestions(dt.date.today()), [])
+        self.assertFalse(self.runtime.handle_message({"op": "apply_limit_suggestion", "target_id": "app:work"})["ok"])
 
     def test_focus_session_blocks_consumption_and_overrides_pause_and_schedule(self):
         target = "app:test"

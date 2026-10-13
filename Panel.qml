@@ -30,6 +30,7 @@ Panel {
   Pending { id: weeklySetting; saved: root.snapshot.weekly_summary_enabled !== false }
   Pending { id: budgetSetting; saved: Number(root.snapshot.daily_budget_minutes || 0) }
   Pending { id: pauseSetting; saved: root.snapshot.paused === true }
+  Pending { id: dayStartSetting; saved: Number(root.snapshot.day_start_hour === undefined ? 4 : root.snapshot.day_start_hour) }
   Pending { id: focusSetting; saved: Number(root.snapshot.focus_until || 0) > 0 }
   readonly property bool warningEnabled: warningSetting.current
   readonly property bool paused: pauseSetting.current
@@ -313,6 +314,8 @@ Panel {
   property var pendingLimitActions: ({})
   property var pendingLimitPeriods: ({})
   property var snoozedPrompts: []
+  property string expandedDay: ""
+  property var handledSuggestions: []
   property var commandQueue: []
 
   function modelRow(row) {
@@ -1138,6 +1141,17 @@ Panel {
                   wrapMode: Text.WordWrap
                 }
 
+                Stepper {
+                  objectName: "dayStartStepper"
+                  label: "Day starts at"
+                  hint: "Later nights count toward the evening before"
+                  valueText: String(dayStartSetting.current).padStart(2, "0") + ":00"
+                  onStep: function(direction) {
+                    var next = Math.max(0, Math.min(6, dayStartSetting.current + direction))
+                    if (next !== dayStartSetting.current) dayStartSetting.set(next, ["day-start", String(next)])
+                  }
+                }
+
               }
             }
 
@@ -1943,6 +1957,68 @@ Panel {
               }
             }
 
+            // Heavy use without an enforced limit: one tap to add a daily limit.
+            Column {
+              objectName: "limitSuggestions"
+              readonly property var suggestions: (root.snapshot.limit_suggestions || []).filter(function(item) {
+                return root.handledSuggestions.indexOf(item.id) < 0
+              })
+              visible: suggestions.length > 0
+              width: parent.width
+              spacing: Style.space(6)
+              Text {
+                text: "WORTH A LIMIT"
+                color: root.mutedText
+                font.pixelSize: Style.font.caption
+                font.bold: true
+              }
+              Repeater {
+                model: parent.suggestions
+                delegate: Row {
+                  required property var modelData
+                  width: parent.width
+                  height: Style.space(30)
+                  spacing: Style.space(6)
+                  Column {
+                    width: parent.width - applyLimit.width - dismissLimit.width - parent.spacing * 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text { width: parent.width; text: modelData.name; textFormat: Text.PlainText; color: root.textColor; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight }
+                    Text { width: parent.width; text: root.formatElapsed(modelData.week_seconds) + " this week"; color: root.mutedText; font.pixelSize: Style.font.caption }
+                  }
+                  Omarchy.Button {
+                    id: applyLimit
+                    objectName: "applyLimitSuggestion"
+                    height: parent.height
+                    text: root.formatQuota(modelData.daily_minutes) + " a day"
+                    tooltipText: "Set a daily Consumption limit"
+                    foreground: root.textColor
+                    fontSize: Style.font.caption
+                    bordered: true
+                    focusable: true
+                    enabled: root.serviceConnected
+                    onClicked: {
+                      var id = modelData.id
+                      root.runAgent(["limit-suggestion", id, "apply"])
+                      root.handledSuggestions = root.handledSuggestions.concat([id])
+                    }
+                  }
+                  Omarchy.Button {
+                    id: dismissLimit
+                    height: parent.height
+                    text: "Dismiss"
+                    foreground: root.mutedText
+                    fontSize: Style.font.caption
+                    focusable: true
+                    onClicked: {
+                      var id = modelData.id
+                      root.runAgent(["limit-suggestion", id, "dismiss"])
+                      root.handledSuggestions = root.handledSuggestions.concat([id])
+                    }
+                  }
+                }
+              }
+            }
+
             Column {
               width: parent.width
               spacing: Style.space(2)
@@ -1956,9 +2032,17 @@ Panel {
                     return String(day.day) >= cutoff
                   }).slice(-7).reverse()
                 }
-                delegate: Row {
-                  id: historyRow
+                delegate: Column {
+                  id: historyDay
                   required property var modelData
+                  readonly property bool expanded: root.expandedDay === modelData.day
+                  readonly property var details: (root.snapshot.day_details || ({}))[modelData.day] || []
+                  width: parent.width
+                  spacing: Style.space(4)
+
+                Row {
+                  id: historyRow
+                  readonly property var modelData: historyDay.modelData
                   readonly property real productive: Number(modelData.productive || 0)
                   readonly property real neutral: Number(modelData.neutral || 0)
                   readonly property real consumed: Number(modelData.consumption || 0)
@@ -2017,6 +2101,52 @@ Panel {
                     horizontalAlignment: Text.AlignRight
                     verticalAlignment: Text.AlignVCenter
                   }
+                  TapHandler {
+                    objectName: "dayToggle"
+                    enabled: historyDay.details.length > 0
+                    cursorShape: Qt.PointingHandCursor
+                    onTapped: root.expandedDay = historyDay.expanded ? "" : historyDay.modelData.day
+                  }
+                }
+
+                Repeater {
+                  model: historyDay.expanded ? historyDay.details : []
+                  delegate: Row {
+                    required property var modelData
+                    objectName: "dayDetail"
+                    width: historyDay.width
+                    height: Style.space(22)
+                    spacing: Style.space(8)
+                    Item { width: Style.space(58) - Style.space(14); height: 1 }
+                    Rectangle {
+                      width: Style.space(6)
+                      height: width
+                      radius: width / 2
+                      anchors.verticalCenter: parent.verticalCenter
+                      color: modelData.category === "productive" ? root.productiveColor
+                        : modelData.category === "consumption" ? root.consumptionColor : root.neutralColor
+                    }
+                    Text {
+                      width: parent.width - Style.space(58) - Style.space(64) - parent.spacing * 2
+                      height: parent.height
+                      text: modelData.name
+                      textFormat: Text.PlainText
+                      color: root.textColor
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      verticalAlignment: Text.AlignVCenter
+                    }
+                    Text {
+                      width: Style.space(64)
+                      height: parent.height
+                      text: root.formatElapsed(modelData.seconds)
+                      color: root.mutedText
+                      font.pixelSize: Style.font.caption
+                      horizontalAlignment: Text.AlignRight
+                      verticalAlignment: Text.AlignVCenter
+                    }
+                  }
+                }
                 }
               }
             }

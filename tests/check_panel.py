@@ -248,6 +248,33 @@ Item {
  focusPanel.commandQueue=[]; focusPanel.snoozedPrompts=[]
  focusPanel.page="manage"
  }
+ function test_history_details_and_limit_suggestions() {
+ var previous = widget.snapshot
+ var day = Qt.formatDateTime(new Date(), "yyyy-MM-dd")
+ widget.snapshot = Object.assign({}, previous, {history:[{day:day, productive:10, screen_seconds:900}],
+   day_details:(function(){ var d = {}; d[day] = [{id:"app:two",name:"Two",category:"productive",seconds:600}]; return d })(),
+   limit_suggestions:[{id:"app:two",name:"Two",week_seconds:14400,daily_minutes:30}], day_start_hour:4})
+ focusPanel.page="history"; wait(50)
+ compare(findChild(focusPanel, "dayDetail"), null)
+ focusPanel.expandedDay = day; wait(30)
+ verify(findChild(focusPanel, "dayDetail") !== null)
+ var apply = findChild(focusPanel, "applyLimitSuggestion")
+ compare(apply.text, "30m a day")
+ apply.clicked()
+ compare(focusPanel.commandQueue[0][0], "limit-suggestion")
+ compare(focusPanel.commandQueue[0][2], "apply")
+ verify(!findChild(focusPanel, "limitSuggestions").visible)
+ focusPanel.commandQueue=[]
+ focusPanel.page="manage"; focusPanel.manageSection="schedule"; wait(30)
+ var dayStart = findChild(focusPanel, "dayStartStepper")
+ compare(dayStart.valueText, "04:00")
+ dayStart.step(1)
+ compare(focusPanel.commandQueue[0][0], "day-start")
+ compare(focusPanel.commandQueue[0][1], "5")
+ focusPanel.commandQueue=[]; focusPanel.expandedDay=""; focusPanel.handledSuggestions=[]
+ focusPanel.manageSection=""
+ widget.snapshot = previous
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)

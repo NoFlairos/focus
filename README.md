@@ -59,6 +59,10 @@ limit is **per hour** (resets at each clock hour) or **per day**; the default ac
 - **Focus session:** 25, 50 or 90 minutes blocking all Consumption, even outside
   the schedule. Ending or pausing stops it.
 - **Weekly summary:** a Monday notification with last week's screen time (History).
+- **History:** click a day for its top apps and sites. **Worth a limit** proposes a
+  daily limit for heavily used entries that have none.
+- **Day starts at** (schedule, default 04:00): late nights count toward the evening
+  before for daily limits, budget and history.
 
 Screen time counts simultaneous activity once. Per-app totals can therefore
 exceed screen time. Tracking stops while paused, idle, locked or outside the schedule.
