@@ -1,24 +1,20 @@
-# Validation — 2026-10-02
+# Validation — 2026-10-13 (0.8.0)
 
-**Passed:** 73 Python tests, browser enforcement tests, Qt panel integration,
+**Passed:** 87 Python tests, browser enforcement tests, 11 Qt panel tests,
 Omarchy manifest validation and systemd unit-file validation.
 
 An isolated Chromium 152 profile loaded the real extension and connected to the
-installed native host and helper. Connection loss, warning persistence and
-installation/removal passed; uninstall retained history as documented.
-Smart/Group linking, rule migration, exclusions, immediate Track again recovery,
-privacy controls and both scroll shortcuts have regression coverage.
+installed native host and helper. An active tab closed at its limit while a
+background tab stayed open; Smart grouping joined two pages declaring the same
+application; connection loss, installation and removal passed.
 
-Reproduce with `./scripts/check-isolated.sh`. Bubblewrap isolates network/processes
-and uses temporary profiles and XDG folders, without the personal desktop or
-session bus. Chromium's inner sandbox is disabled only inside this outer sandbox.
-The helper runs directly; systemctl calls are recorded by a test substitute.
-Qt integration uses shell fixtures.
+Limits (hour, day, budget, focus session, 5 more minutes), day-start shifting,
+limit suggestions, Review threshold and subdomain grouping have regression coverage.
+Tests never show real notifications or close real windows.
 
-**Still required:** full startup/restart and systemd sandbox behavior in a fresh
-Omarchy session, combined desktop tracking/enforcement checks, and testing with
-the Chrome Store extension ID. A headless panel session could not start here
-because the graphics backend was unavailable.
+Used daily on Omarchy since 0.4: panel, bar mark and scrolling were checked on a
+1.57× display. Reproduce the isolated run with `./scripts/check-isolated.sh`
+(bubblewrap, temporary profiles and XDG folders, no personal desktop or session bus).
 
-[Captures](CAPTURES.md) document the extension test and the user's existing desktop;
-they do not establish that fresh-machine testing is complete.
+**Not yet covered:** a fresh Omarchy installation from the catalog, and the
+Chrome Web Store build of 0.5.0 (published store version: 0.4.1).

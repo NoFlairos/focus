@@ -1,4 +1,4 @@
-# Chrome Web Store draft
+# Chrome Web Store listing
 
 **Name:** Focus — Site Tracker
 **Category:** Productivity · **Language:** English
@@ -13,7 +13,9 @@ check. Separate productive work from consumption and set limits that fit your ro
 
 • Track your daily screen time.
 • Classify apps and sites as Productive, Neutral or Consumption.
-• Set hourly limits for distracting services.
+• Set hourly or daily limits, or one daily budget for all distractions.
+• Start a focus session that blocks distracting sites for 25, 50 or 90 minutes.
+• Take 5 more minutes once when a limit is reached, instead of giving up.
 • Share one limit across an app and its website.
 • Choose tracking hours, pause when needed, and review your week.
 
@@ -47,13 +49,13 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 - ZIP: `dist/focus-chrome-0.5.0.zip`
 - Icon: `extensions/chromium/icons/128.png`
 - Promo: `release/assets/promo-440x280.png`
-- Screenshots: `release/assets/extension-connected.png` and `extension-offline.png`
+- Screenshot: 1280×800 composition of `release/assets/panel-now.png` and `panel-history.png`
 - Homepage: https://github.com/NoFlairos/focus
 - Support: https://github.com/NoFlairos/focus/issues
 - Privacy: https://noflairos.github.io/focus/privacy.html
 
-Remaining: publisher/contact details, account declarations, countries and visibility.
-Choose deferred publishing. [Reviewer instructions](REVIEWER.md).
+Published 0.4.1. To update: upload the 0.5.0 ZIP and refresh the description and
+screenshot. [Reviewer instructions](REVIEWER.md).
 
 References checked 2026-09-29: [images](https://developer.chrome.com/docs/webstore/images),
 [privacy fields](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy),

@@ -1,15 +1,28 @@
+<p align="center"><img src="assets/focus.svg" width="96" alt="Focus"></p>
+
 # Focus
 
-Stay focused. Understand your screen time and set limits on distractions.
+Stay focused. Understand your screen time and keep distractions in check.
 
-Track apps and websites, give distracting services an hourly budget, and review
-your week. Built for Omarchy Linux. Your activity stays on your computer.
+Focus tracks the apps and websites you actually look at, separates productive work
+from consumption, and enforces the limits you choose. Built for Omarchy Linux.
+Everything stays on your computer.
 
-![Now](release/assets/panel-now.png)
+<p align="center">
+  <img src="release/assets/panel-now.png" width="32%" alt="Now">
+  <img src="release/assets/panel-history.png" width="32%" alt="History">
+  <img src="release/assets/panel-manage.png" width="32%" alt="Manage">
+</p>
 
-![Focus in the bar](release/assets/bar-focus.png)
+<p align="center"><img src="release/assets/bar-focus.png" alt="Focus in the Omarchy bar"></p>
 
-![Manage](release/assets/panel-manage.png)
+- **Screen time without double counting**, by app and by website, during your schedule.
+- **Limits per hour or per day**, a daily Consumption budget, and a choice of
+  closing, notifying or keeping open when a limit is reached.
+- **Focus sessions** of 25, 50 or 90 minutes that block all Consumption.
+- **5 more minutes**, once per limit period, from the notification or the panel.
+- **History** with daily details, a weekly summary and suggested limits.
+- **Smart grouping** of an app with its website and of a site's subdomains.
 
 ## Install
 
@@ -28,8 +41,8 @@ omarchy plugin enable io.github.noflairos.focus-ratio
 omarchy restart shell
 ```
 
-The helper installer registers the Chrome Web Store extension for Chromium and
-Google Chrome automatically. Store publication is pending.
+For websites, install the [Focus extension from the Chrome Web Store](https://chromewebstore.google.com/detail/dmeieacelhalokmjoijllpieglfjojjo)
+in Chromium or Google Chrome. The helper installer registers it automatically.
 
 For websites during development, load `~/.local/share/focus-ratio/browser` in `chrome://extensions`
 with Developer mode enabled. Copy its ID, then run:
@@ -44,25 +57,20 @@ Paths follow your XDG settings when configured.
 
 ## Use
 
-- **Now:** visible apps and sites. **Review:** classify or exclude entries used
-  for at least 10 minutes over the last 7 days.
-- **History:** the last seven days. **Manage:** schedule (saved automatically),
-  apps & sites, connection and data export. **Pause:** stop tracking and limits.
+| Page | What it does |
+| --- | --- |
+| **Now** | Apps and sites on screen, time left, and *Limit reached* with 5 more minutes. |
+| **Review** | Classify or exclude entries used 10+ minutes over the last 7 days. |
+| **History** | Last 7 days; click a day for its top entries. *Worth a limit* suggestions. |
+| **Manage** | Schedule (saved automatically), apps & sites, connection and data export. |
 
-Defaults: weekdays 08:00–17:00, 10 minutes/hour for Consumption. Each entry's
-limit is **per hour** (resets at each clock hour) or **per day**; the default action
-**closes the window or active tab**. Choose Notify or Keep open under **More**.
+The header starts a **Focus session** or **pauses** tracking. Clicking an entry's name
+in Now opens it in Manage. Each entry's **More** holds its limit period and action,
+subdomain mode, linked members, Merge into and Exclude.
 
-- **5 more minutes:** once per limit period, from the limit notification (stays until
-  you choose) or from Now for two minutes after the limit is reached.
-- **Daily Consumption budget:** one cap for all Consumption together (Apps & sites).
-- **Focus session:** 25, 50 or 90 minutes blocking all Consumption, even outside
-  the schedule. Ending or pausing stops it.
-- **Weekly summary:** a Monday notification with last week's screen time (History).
-- **History:** click a day for its top apps and sites. **Worth a limit** proposes a
-  daily limit for heavily used entries that have none.
-- **Day starts at** (schedule, default 04:00): late nights count toward the evening
-  before for daily limits, budget and history.
+Defaults: weekdays 08:00–17:00, a 10-minute hourly limit for Consumption that closes
+the window or active tab, and days starting at 04:00 so late nights count toward the
+evening before. The limit notification stays on screen until you choose.
 
 Screen time counts simultaneous activity once. Per-app totals can therefore
 exceed screen time. Tracking stops while paused, idle, locked or outside the schedule.
@@ -70,9 +78,8 @@ Mapped windows can count even when covered; background tabs do not count, and
 ambiguous browser titles are skipped.
 
 Linked entries share settings and one counter. Merging adds existing history,
-which cannot be split afterward. Detach starts an independent counter with the
-same settings. Each entry's **More** holds its subdomain mode, members, Merge into
-and Exclude. Subdomains have three modes:
+which cannot be split afterward; Detach starts an independent counter with the
+same settings. Subdomains have three modes:
 
 - **Smart** (default): subdomains of a site join it unless they declare their own
   web-app manifest or application name, or you gave them another category.
@@ -86,7 +93,6 @@ entries stay independent. Same-name entries across domains appear as suggestions
 Classified entries can be excluded without losing their settings or history.
 Excluding an unclassified entry deletes its pending history. Track again restores
 the entry immediately. Excluded entries stay in a collapsed list.
-Use **↑ / ↓** to jump through long lists.
 
 ## Data and removal
 

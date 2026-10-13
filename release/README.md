@@ -1,23 +1,19 @@
 # Publication
 
-[Source](https://github.com/NoFlairos/focus) ·
-[Last published release: 0.4.0](https://github.com/NoFlairos/focus/releases/tag/v0.4.0) ·
-[Privacy](https://noflairos.github.io/focus/privacy.html)
-
-Current source and extension: **0.5.0**. Store submissions require separate approval.
+| Channel | Status |
+| --- | --- |
+| [GitHub](https://github.com/NoFlairos/focus) | Source and releases; this repository is the plugin source. |
+| [Omarchy plugin catalog](https://omarchyplugins.com/plugin.html?id=io.github.noflairos.focus-ratio) | Listed; updates go through a *Verify* issue for the new commit. |
+| [Chrome Web Store](https://chromewebstore.google.com/detail/dmeieacelhalokmjoijllpieglfjojjo) | Published (0.4.1); 0.5.0 is the current extension build. |
 
 | File | Purpose |
 | --- | --- |
-| [CHROME-STORE.md](CHROME-STORE.md) | Chrome listing and permission declarations |
-| [OMARCHY-STORE.md](OMARCHY-STORE.md) | Omarchy submission |
-| [REVIEWER.md](REVIEWER.md) | Reviewer setup |
-| [VALIDATION.md](VALIDATION.md) | Tests and remaining checks |
-| [CAPTURES.md](CAPTURES.md) | Images and edits |
+| [CHROME-STORE.md](CHROME-STORE.md) | Listing text and permission declarations |
+| [OMARCHY-STORE.md](OMARCHY-STORE.md) | Catalog entry |
+| [REVIEWER.md](REVIEWER.md) | Reviewer setup and test steps |
+| [VALIDATION.md](VALIDATION.md) | Tests run and remaining checks |
+| [CAPTURES.md](CAPTURES.md) | Image sources |
 
-Build: `./scripts/check.sh`, then `python3 scripts/build-release.py`.
-Archives and SHA256SUMS go to `dist/`; installed user data is never included.
-Artwork sources are in `assets/`, store images in `release/assets/`, and the
-privacy page in `site/`. Nothing is uploaded by the build.
-
-Before submission: finish the fresh-session checks, confirm publisher/contact
-and distribution settings, and test the store-assigned extension ID.
+Build: `./scripts/check.sh`, then `python3 scripts/build-release.py`. Archives and
+SHA256SUMS go to `dist/`; installed user data is never included and nothing is uploaded.
+Artwork sources are in `assets/`, store images in `release/assets/`, the privacy page in `site/`.
