@@ -18,6 +18,7 @@ import ipaddress
 import os
 import pathlib
 import re
+import signal
 import socket
 import socketserver
 import sqlite3
@@ -47,6 +48,7 @@ POLL_SECONDS = 1.0
 REVIEW_MIN_SECONDS = 600
 REVIEW_DAYS = 7
 STATE_HEARTBEAT_SECONDS = 10
+DB_COMMIT_SECONDS = 30  # usage seconds are batched; a crash loses at most this much tracking
 BROWSER_APP_IDS = {"chromium", "chromium-bin", "google-chrome", "google-chrome-stable", "chrome"}
 
 
@@ -113,7 +115,8 @@ def state_home() -> pathlib.Path:
 CONFIG_DIR = config_home() / APP_NAME
 STATE_DIR = state_home() / APP_NAME
 CONFIG_PATH = CONFIG_DIR / "config.json"
-STATE_PATH = STATE_DIR / "state.json"
+# Rewritten every second for the bar widget: keep it in RAM (tmpfs), not on the SSD.
+STATE_PATH = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / APP_NAME / "state.json"
 DB_PATH = STATE_DIR / "history.sqlite3"
 SOCKET_PATH = STATE_DIR / "control.sock"
 
@@ -192,22 +195,57 @@ def save_config(value: dict[str, Any]) -> None:
     atomic_json(CONFIG_PATH, value)
 
 
+def hypr_socket() -> pathlib.Path | None:
+    runtime_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "hypr"
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if signature and (runtime_dir / signature / ".socket.sock").exists():
+        return runtime_dir / signature / ".socket.sock"
+    sockets = list(runtime_dir.glob("*/.socket.sock"))
+    return max(sockets, key=lambda path: path.stat().st_mtime) if sockets else None
+
+
+# Talk to Hyprland's IPC socket directly: spawning hyprctl several times per
+# second kept the CPU awake. A tick asks for the same data more than once, so
+# answers are reused for a few milliseconds.
+_hypr_cache: dict[str, tuple[float, Any]] = {}
+
+
+def hypr_query(command: str) -> Any:
+    cached = _hypr_cache.get(command)
+    if cached and time.monotonic() - cached[0] < 0.05:
+        return cached[1]
+    parsed: Any = None
+    path = hypr_socket()
+    if path:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(1.5)
+                client.connect(str(path))
+                client.sendall(b"j/" + command.encode())
+                chunks = []
+                while chunk := client.recv(65536):
+                    chunks.append(chunk)
+            parsed = json.loads(b"".join(chunks))
+        except (OSError, json.JSONDecodeError, ValueError):
+            parsed = None
+    if parsed is None:
+        try:
+            result = subprocess.run(["hyprctl", "-j", command], capture_output=True, text=True, timeout=1.5, check=True)
+            parsed = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            return None
+    _hypr_cache[command] = (time.monotonic(), parsed)
+    return parsed
+
+
 def hypr_json(command: str) -> list[dict[str, Any]]:
-    try:
-        result = subprocess.run(["hyprctl", "-j", command], capture_output=True, text=True, timeout=1.5, check=True)
-        parsed = json.loads(result.stdout)
-        return parsed if isinstance(parsed, list) else []
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        return []
+    parsed = hypr_query(command)
+    return parsed if isinstance(parsed, list) else []
 
 
 def focused_window_address() -> str:
-    try:
-        result = subprocess.run(["hyprctl", "-j", "activewindow"], capture_output=True,
-                                text=True, timeout=1.5, check=True)
-        return str(json.loads(result.stdout).get("address") or "")
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, AttributeError):
-        return ""
+    parsed = hypr_query("activewindow")
+    return str(parsed.get("address") or "") if isinstance(parsed, dict) else ""
 
 
 def browser_is_running() -> bool:
@@ -365,19 +403,28 @@ def service_site_for_app(app_id: str) -> str:
     return ""
 
 
+SESSION_STATUS_SECONDS = 5  # lock/idle changes slowly; polling loginctl every tick cost a process per second
+_session_cache: tuple[float, tuple[bool, bool]] | None = None
+
+
 def session_status() -> tuple[bool, bool]:
+    global _session_cache
     session_id = os.environ.get("XDG_SESSION_ID")
     if not session_id:
         return False, False
+    if _session_cache and time.monotonic() - _session_cache[0] < SESSION_STATUS_SECONDS:
+        return _session_cache[1]
     try:
         result = subprocess.run(
             ["loginctl", "show-session", session_id, "--property=LockedHint", "--property=IdleHint"],
             capture_output=True, text=True, timeout=0.8, check=True,
         )
         flags = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
-        return flags.get("LockedHint", "").lower() == "yes", flags.get("IdleHint", "").lower() == "yes"
+        status = flags.get("LockedHint", "").lower() == "yes", flags.get("IdleHint", "").lower() == "yes"
     except (OSError, subprocess.SubprocessError):
-        return False, False
+        status = False, False
+    _session_cache = (time.monotonic(), status)
+    return status
 
 
 class Store:
@@ -401,6 +448,7 @@ class Store:
         """)
         self.db.commit()
         self.last_pruned_day: dt.date | None = None
+        self.last_commit = time.monotonic()
 
     def prune(self, now: dt.datetime) -> None:
         if self.last_pruned_day == now.date():
@@ -441,15 +489,14 @@ class Store:
     def add_times(self, categories: dict[str, str], seconds: float, bucket: str, day: str) -> None:
         # Record availability even on inactive days; older history stays unknown.
         # One elapsed interval per tick, regardless of target/window count.
-        with self.db:
-            self.db.execute("""
-                INSERT INTO daily_screen_time(day,seconds,started_at) VALUES(?,?,?)
-                ON CONFLICT(day) DO UPDATE SET seconds=seconds+excluded.seconds
-            """, (day, max(0.0, seconds) if categories else 0.0,
-                  dt.datetime.now().astimezone().isoformat(timespec="seconds")))
-        if seconds <= 0 or not categories:
-            return
-        with self.db:
+        # Writes stay in the open transaction (visible to this connection's reads);
+        # flush() commits them in batches instead of hitting the SSD every second.
+        self.db.execute("""
+            INSERT INTO daily_screen_time(day,seconds,started_at) VALUES(?,?,?)
+            ON CONFLICT(day) DO UPDATE SET seconds=seconds+excluded.seconds
+        """, (day, max(0.0, seconds) if categories else 0.0,
+              dt.datetime.now().astimezone().isoformat(timespec="seconds")))
+        if seconds > 0 and categories:
             for target_id, category in categories.items():
                 self.db.execute("""
                     INSERT INTO daily_usage(day,target_id,category,seconds) VALUES(?,?,?,?)
@@ -460,6 +507,17 @@ class Store:
                         INSERT INTO hourly_usage(target_id,bucket,seconds) VALUES(?,?,?)
                         ON CONFLICT(target_id,bucket) DO UPDATE SET seconds=seconds+excluded.seconds
                     """, (target_id, bucket, seconds))
+        self.flush()
+
+    def flush(self, force: bool = False) -> None:
+        if force or time.monotonic() - self.last_commit >= DB_COMMIT_SECONDS:
+            self.db.commit()
+            self.last_commit = time.monotonic()
+
+    def close(self) -> None:
+        """Commit batched usage, then close: a clean stop loses nothing."""
+        self.flush(force=True)
+        self.db.close()
 
     def history(self, days: int = 30) -> list[dict[str, Any]]:
         start = (dt.date.today() - dt.timedelta(days=days - 1)).isoformat()
@@ -733,15 +791,18 @@ class Runtime:
     def group_suggestions(self, rows: list[dict]) -> list[dict]:
         """Same-name entries across domains (e.g. an app and its site); subdomains group automatically."""
         candidates = [row for row in rows if row["configured"]]
+        # Normalize once: this runs every tick and the pairwise regex dominated its cost.
+        names = [re.sub(r"[^\w]", "", row["name"].casefold()) for row in candidates]
         suggestions = []
         for index, source in enumerate(candidates):
-            name = re.sub(r"[^\w]", "", source["name"].casefold())
+            name = names[index]
             if len(name) < 3:
                 continue
-            for destination in candidates[index + 1:]:
+            for offset, destination in enumerate(candidates[index + 1:], index + 1):
+                if names[offset] != name:
+                    continue
                 key = "|".join(sorted((source["id"], destination["id"])))
-                if key not in self.config["dismissed_suggestions"] and name == re.sub(
-                        r"[^\w]", "", destination["name"].casefold()):
+                if key not in self.config["dismissed_suggestions"]:
                     suggestions.append({"source": source["id"], "destination": destination["id"],
                                         "name": source["name"], "reason": "Matching names"})
         return suggestions[:8]
@@ -1567,6 +1628,8 @@ class Runtime:
         focus_event = threading.Event()
         threading.Thread(target=self.watch_focus, args=(focus_event,), daemon=True).start()
         last = time.monotonic()
+        # systemd stops the service with SIGTERM; exit through `finally` so batched usage is committed.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         try:
             while True:
                 start = time.monotonic()
@@ -1576,6 +1639,8 @@ class Runtime:
                 focus_event.wait(max(0.1, POLL_SECONDS - (time.monotonic() - start)))
                 focus_event.clear()
         finally:
+            with self.lock:
+                self.store.flush(force=True)
             server.shutdown()
             server.server_close()
 

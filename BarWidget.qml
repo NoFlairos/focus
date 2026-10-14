@@ -14,7 +14,8 @@ BarWidget {
   readonly property string dataHome: Quickshell.env("XDG_DATA_HOME") || (Quickshell.env("HOME") + "/.local/share")
   readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
   readonly property string agentPath: dataHome + "/focus-ratio/focus_ratio_agent.py"
-  readonly property string statePath: stateHome + "/focus-ratio/state.json"
+  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
+  readonly property string statePath: runtimeDir + "/focus-ratio/state.json"
   property var snapshot: ({ tracked: [], today: ({}), history: [] })
   property string snapshotText: ""
   property double statusNow: Date.now()

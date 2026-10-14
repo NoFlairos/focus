@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — 2026-10-14
+
+- **Lighter on the system:** the live status is kept in memory instead of being
+  rewritten on disk every second; usage is committed every 30 s and on stop
+  (a crash loses at most 30 s); Hyprland is queried over its socket instead of
+  spawning `hyprctl`; lock/idle state is polled every 5 s.
+- The installer adds the in-memory runtime directory to the user service.
+
 ## 0.8.0 — 2026-10-13
 
 - **Limits:** per hour or per day, a daily Consumption budget, and *5 more minutes*

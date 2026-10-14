@@ -45,7 +45,7 @@ class AgentTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.runtime = agent.Runtime()
-        self.addCleanup(lambda: self.runtime.store.db.close())
+        self.addCleanup(lambda: self.runtime.store.close())
         # Calendar days in tests; the late-night shift has its own test.
         self.runtime.config["day_start_hour"] = 0
         self.closed = []
@@ -114,7 +114,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(rows[0]["quota_seconds"], 420)
         self.assertEqual(rows[0]["members"], ["app:test", "site:first.example"])
         self.assertFalse(self.runtime.handle_message({"op": "merge", "source": "site:first.example", "destination": "app:test"})["ok"])
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.resolve_target_id("site:first.example"), "app:test")
         self.assertEqual(self.runtime.store.used_this_hour("app:test", bucket), 30)
@@ -181,12 +181,12 @@ class AgentTests(unittest.TestCase):
         self.runtime.config.pop("link_schema", None)
         self.runtime.config["service_links"][source] = "site:example.org"
         agent.save_config(self.runtime.config)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.resolve_target_id(source), "site:service.example.org")
         self.runtime.config["service_links"][source] = "site:example.org"
         agent.save_config(self.runtime.config)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.resolve_target_id(source), "site:example.org")
 
@@ -200,7 +200,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.reconcile_targets({app})
         self.assertEqual(self.runtime.resolve_target_id(app), app)
         self.assertEqual(self.runtime.config["targets"][app]["quota_minutes"], 10)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.resolve_target_id(app), app)
         self.assertTrue(self.runtime.handle_message({"op": "merge", "source": app, "destination": site})["ok"])
@@ -226,7 +226,7 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(self.runtime.handle_message({"op": "pause", "paused": True, "duration": "15"})["ok"])
         until = self.runtime.pause_until
         self.assertTrue(self.runtime.paused)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertTrue(self.runtime.paused)
         self.runtime.resume_if_due(dt.datetime.fromtimestamp(until + 1).astimezone())
@@ -484,6 +484,24 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(state["labels"]["app:test"], "Test")
         self.assertIn(state["diagnostics"]["browser_status"], {"browser_closed", "connecting", "browser_offline"})
 
+    def test_usage_writes_are_batched_and_flushed_on_close(self):
+        import sqlite3
+        store = self.runtime.store
+        store.flush(force=True)
+        self.consume("app:test", 30, "productive")
+        other = sqlite3.connect(agent.DB_PATH)
+        self.addCleanup(other.close)
+        count = lambda: other.execute("SELECT COUNT(*) FROM daily_usage").fetchone()[0]
+        self.assertEqual(count(), 0)
+        self.assertEqual(store.target_today(dt.date.today().isoformat()), {"app:test": 30})
+        store.last_commit -= agent.DB_COMMIT_SECONDS
+        store.flush()
+        self.assertEqual(count(), 1)
+        self.consume("app:test", 5, "productive")
+        store.close()
+        self.assertEqual(other.execute("SELECT seconds FROM daily_usage").fetchone()[0], 35)
+        self.runtime = agent.Runtime()
+
     def test_state_is_written_on_change_or_heartbeat_only(self):
         self.clients = []
         self.runtime.tick(0)
@@ -614,7 +632,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.store.target_today(day), {parent: 90})
         self.assertEqual(self.runtime.store.history(), before)
         self.assertNotIn(saved, self.runtime.config["targets"])
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.resolve_target_id(saved), parent)
         self.assertEqual(self.runtime.config["targets"][parent]["category"], "productive")
@@ -728,7 +746,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.config["subdomain_rule_schema"] = 1
         self.runtime.config["subdomain_rules"] = {"one.pages.dev": "group"}
         agent.save_config(self.runtime.config)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.runtime.tick(0)
         self.assertEqual(self.runtime.config["subdomain_rules"], {"pages.dev": "group"})
@@ -888,7 +906,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "exclude", "target_id": target})
         self.clients = []
         self.runtime.handle_message({"op": "unexclude", "target_id": target})
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.runtime.tick(0)
         row = self.runtime.latest_state["tracked"][0]
@@ -954,7 +972,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.blocked_domains(), [])
         self.assertEqual(self.runtime.latest_state["tracked"], [])
         self.assertEqual(self.runtime.store.history(), history)
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.assertEqual(self.runtime.config["targets"]["site:example.org"], settings)
         self.assertEqual(self.runtime.config["ignored_targets"], ["site:example.org"])
@@ -1105,7 +1123,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.latest_state["today"]["screen_seconds"], 10)
         self.assertEqual(sum(row["today_seconds"] for row in self.runtime.latest_state["tracked"]), 20)
         started = self.runtime.latest_state["today"]["screen_started_at"]
-        self.runtime.store.db.close()
+        self.runtime.store.close()
         self.runtime = agent.Runtime()
         self.runtime.tick(5)
         self.assertEqual(self.runtime.latest_state["today"]["screen_seconds"], 15)

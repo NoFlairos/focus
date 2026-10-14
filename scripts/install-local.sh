@@ -29,6 +29,9 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths="$config_dir" "$state_dir"
+# Live state for the bar widget lives in RAM: \$XDG_RUNTIME_DIR/focus-ratio.
+RuntimeDirectory=focus-ratio
+RuntimeDirectoryMode=0700
 
 [Install]
 WantedBy=graphical-session.target

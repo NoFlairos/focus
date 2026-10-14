@@ -10,7 +10,7 @@ const server = http.createServer((req, res) => {
  res.end('<title>Focus limit test</title><meta name="application-name" content="Focus isolated app">Isolated test');
 });
 await new Promise(resolve => server.listen(8080, '127.0.0.1', resolve));
-const timeout=setTimeout(()=>{browser.kill('SIGKILL');console.error('Browser test timed out');process.exit(1)},90000);
+const timeout=setTimeout(()=>{browser.kill('SIGKILL');console.error('Browser test timed out');process.exit(1)},150000);
 try {
  let targets=[];
  for(let i=0;i<80;i++) {await delay(250);try{targets=await(await fetch('http://127.0.0.1:9222/json/list')).json();}catch{} if(targets.some(t=>t.type==='service_worker'))break;}
@@ -35,7 +35,7 @@ try {
  await call('Page.captureScreenshot',{format:'png'}).then(r=>fs.writeFileSync('/test/extension-connected.png',Buffer.from(r.data,'base64')));
  execFileSync('python3',['/test/data/focus-ratio/focus_ratio_agent.py','warning','off']);
  await delay(1500);
- const state=JSON.parse(fs.readFileSync('/test/state/focus-ratio/state.json'));
+ const state=JSON.parse(fs.readFileSync('/test/runtime/focus-ratio/state.json'));
  if(state.warn_before_limit!==false)throw new Error('Warning toggle did not persist');
  if(state.tracked.length)throw new Error('Unexpected real desktop activity in sandbox');
  fs.writeFileSync('/test/browser-result.json',JSON.stringify({extensionLoaded:true,nativeHostConnected:true,warningDisabled:true,trackedEntries:state.tracked.length,screenshot:'640x400',updatedAt:state.updated_at},null,2));
@@ -54,15 +54,20 @@ try {
  const backgroundTab = await evaluate('chrome.tabs.create({url:"http://127.0.0.1:8080",active:false,index:0})');
  for(let i=0;i<40;i++) {
    await delay(250);
-   const state = JSON.parse(fs.readFileSync('/test/state/focus-ratio/state.json'));
+   const state = JSON.parse(fs.readFileSync('/test/runtime/focus-ratio/state.json'));
    if(state.tracked.some(row => row.id === 'site:127.0.0.1' && row.visible_windows === 1)) break;
    if(i === 39) throw new Error('Active test site was not matched');
  }
- execFileSync('python3', ['-c', `import sys,datetime
+ // The agent batches usage writes for up to DB_COMMIT_SECONDS; wait for its lock.
+ execFileSync('python3', ['-c', `import sys,datetime,sqlite3
 sys.path.insert(0,'/test/data/focus-ratio')
 import focus_ratio_agent as a
 now=datetime.datetime.now().astimezone()
-s=a.Store();s.add_times({'site:127.0.0.1':'consumption'},61,a.current_hour_bucket(now),now.date().isoformat());s.db.close()`]);
+db=sqlite3.connect(a.DB_PATH, timeout=45)
+with db:
+    db.execute("INSERT INTO daily_usage VALUES(?,?,?,?) ON CONFLICT(day,target_id,category) DO UPDATE SET seconds=seconds+excluded.seconds", (now.date().isoformat(),'site:127.0.0.1','consumption',61))
+    db.execute("INSERT INTO hourly_usage VALUES(?,?,?) ON CONFLICT(target_id,bucket) DO UPDATE SET seconds=seconds+excluded.seconds", ('site:127.0.0.1',a.current_hour_bucket(now),61))
+db.close()`]);
  let tabIds = [];
  for(let i=0;i<40;i++) {
    await delay(250);

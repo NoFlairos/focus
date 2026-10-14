@@ -28,7 +28,8 @@ Pause stops counting and enforcement, but the browser bridge still sends local
 metadata. Disable the extension to stop those messages. Uninstalling preserves
 settings and history. To erase them, stop the helper and delete
 `~/.config/focus-ratio` and `~/.local/state/focus-ratio` (or their XDG equivalents).
-Exports in the state directory are deleted with it.
+Exports in the state directory are deleted with it. The live status shown in the
+bar is kept in memory (`$XDG_RUNTIME_DIR/focus-ratio`) and removed when the helper stops.
 
 ## Permissions
 
