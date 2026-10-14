@@ -16,5 +16,5 @@ Used daily on Omarchy since 0.4: panel, bar mark and scrolling were checked on a
 1.57× display. Reproduce the isolated run with `./scripts/check-isolated.sh`
 (bubblewrap, temporary profiles and XDG folders, no personal desktop or session bus).
 
-**Not yet covered:** a fresh Omarchy installation from the catalog, and the
-Chrome Web Store build of 0.5.0 (published store version: 0.4.1).
+**Not yet covered:** a fresh Omarchy installation from the catalog. The Chrome Web
+Store now serves extension 0.5.0, the build tested above.

@@ -54,8 +54,8 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 - Support: https://github.com/NoFlairos/focus/issues
 - Privacy: https://noflairos.github.io/focus/privacy.html
 
-Published 0.4.1. To update: upload the 0.5.0 ZIP and refresh the description and
-screenshot. [Reviewer instructions](REVIEWER.md).
+Published: 0.5.0 (2026-10-14). Next update: upload the new ZIP from `dist/`, refresh
+the description and screenshot if features changed. [Reviewer instructions](REVIEWER.md).
 
 References checked 2026-09-29: [images](https://developer.chrome.com/docs/webstore/images),
 [privacy fields](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy),
