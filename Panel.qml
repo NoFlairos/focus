@@ -298,6 +298,8 @@ Panel {
   property var scheduleDraft: null
   property var pendingSchedule: null
   property string scheduleFeedback: ""
+  // Editable fields only exist while shown: a hidden TextField still fetches the clipboard on every change.
+  readonly property var scheduleFields: scheduleTimes.item ? [scheduleTimes.item.start, scheduleTimes.item.end] : []
   readonly property var schedule: scheduleDraft || savedSchedule
   readonly property color textColor: Color.popups.text
   readonly property color solidPopup: Qt.rgba(Color.popups.background.r,
@@ -564,9 +566,8 @@ Panel {
   }
 
   function finishScheduleEditing() {
-    scheduleStart.deselect()
-    scheduleEnd.deselect()
-    if (scheduleStart.activeFocus || scheduleEnd.activeFocus)
+    scheduleFields.forEach(function(field) { field.deselect() })
+    if (scheduleFields.some(function(field) { return field.activeFocus }))
       keyCatcher.forceActiveFocus()
   }
 
@@ -683,7 +684,7 @@ Panel {
       anchors.fill: parent
       TapHandler {
         onTapped: function(eventPoint, button) {
-          var fields = [scheduleStart, scheduleEnd]
+          var fields = root.scheduleFields
           for (var i = 0; i < fields.length; i++) {
             var point = fields[i].mapFromItem(keyCatcher, eventPoint.position.x, eventPoint.position.y)
             if (fields[i].visible && fields[i].contains(point)) return
@@ -1059,70 +1060,79 @@ Panel {
                   height: Style.space(42)
                   radius: Style.cornerRadius
                   color: root.softSurface
-                  Row {
+                  Loader {
+                    id: scheduleTimes
                     anchors.fill: parent
-                    TextField {
-                      id: scheduleStart
-                      width: (parent.width - timeSeparator.width) / 2
-                      height: parent.height
-                      enabled: !root.pendingSchedule
-                      text: root.scheduleStartDraft
-                      maximumLength: 5
-                      horizontalAlignment: Text.AlignHCenter
-                      verticalAlignment: Text.AlignVCenter
-                      font.family: "monospace"
-                      font.pixelSize: Style.font.body
-                      color: root.textColor
-                      selectByMouse: true
-                      Accessible.name: "Tracking start time"
-                      onAccepted: root.saveSchedule(true)
-                      onEditingFinished: root.saveSchedule(true)
-                      background: Rectangle {
-                        radius: Style.cornerRadius
-                        color: scheduleStart.activeFocus ? root.hoverSurface : "transparent"
-                      }
-                      onTextEdited: {
-                        root.scheduleTimeEdited = true
-                        root.scheduleStartDraft = text
-                        root.scheduleFeedback = ""
-                        scheduleAutosave.restart()
-                      }
-                    }
-                    Text {
-                      id: timeSeparator
-                      width: Style.space(24)
-                      height: parent.height
-                      text: "→"
-                      horizontalAlignment: Text.AlignHCenter
-                      verticalAlignment: Text.AlignVCenter
-                      color: root.mutedText
-                      font.pixelSize: Style.font.bodySmall
-                    }
-                    TextField {
-                      id: scheduleEnd
-                      width: (parent.width - timeSeparator.width) / 2
-                      height: parent.height
-                      enabled: !root.pendingSchedule
-                      text: root.scheduleEndDraft
-                      maximumLength: 5
-                      horizontalAlignment: Text.AlignHCenter
-                      verticalAlignment: Text.AlignVCenter
-                      font.family: "monospace"
-                      font.pixelSize: Style.font.body
-                      color: root.textColor
-                      selectByMouse: true
-                      Accessible.name: "Tracking end time"
-                      onAccepted: root.saveSchedule(true)
-                      onEditingFinished: root.saveSchedule(true)
-                      background: Rectangle {
-                        radius: Style.cornerRadius
-                        color: scheduleEnd.activeFocus ? root.hoverSurface : "transparent"
-                      }
-                      onTextEdited: {
-                        root.scheduleTimeEdited = true
-                        root.scheduleEndDraft = text
-                        root.scheduleFeedback = ""
-                        scheduleAutosave.restart()
+                    active: root.opened && root.page === "manage" && root.manageSection === "schedule"
+                      && !root.scheduleAllDay
+                    sourceComponent: Component {
+                      Row {
+                        readonly property Item start: scheduleStart
+                        readonly property Item end: scheduleEnd
+                        TextField {
+                          id: scheduleStart
+                          width: (parent.width - timeSeparator.width) / 2
+                          height: parent.height
+                          enabled: !root.pendingSchedule
+                          text: root.scheduleStartDraft
+                          maximumLength: 5
+                          horizontalAlignment: Text.AlignHCenter
+                          verticalAlignment: Text.AlignVCenter
+                          font.family: "monospace"
+                          font.pixelSize: Style.font.body
+                          color: root.textColor
+                          selectByMouse: true
+                          Accessible.name: "Tracking start time"
+                          onAccepted: root.saveSchedule(true)
+                          onEditingFinished: root.saveSchedule(true)
+                          background: Rectangle {
+                            radius: Style.cornerRadius
+                            color: scheduleStart.activeFocus ? root.hoverSurface : "transparent"
+                          }
+                          onTextEdited: {
+                            root.scheduleTimeEdited = true
+                            root.scheduleStartDraft = text
+                            root.scheduleFeedback = ""
+                            scheduleAutosave.restart()
+                          }
+                        }
+                        Text {
+                          id: timeSeparator
+                          width: Style.space(24)
+                          height: parent.height
+                          text: "→"
+                          horizontalAlignment: Text.AlignHCenter
+                          verticalAlignment: Text.AlignVCenter
+                          color: root.mutedText
+                          font.pixelSize: Style.font.bodySmall
+                        }
+                        TextField {
+                          id: scheduleEnd
+                          width: (parent.width - timeSeparator.width) / 2
+                          height: parent.height
+                          enabled: !root.pendingSchedule
+                          text: root.scheduleEndDraft
+                          maximumLength: 5
+                          horizontalAlignment: Text.AlignHCenter
+                          verticalAlignment: Text.AlignVCenter
+                          font.family: "monospace"
+                          font.pixelSize: Style.font.body
+                          color: root.textColor
+                          selectByMouse: true
+                          Accessible.name: "Tracking end time"
+                          onAccepted: root.saveSchedule(true)
+                          onEditingFinished: root.saveSchedule(true)
+                          background: Rectangle {
+                            radius: Style.cornerRadius
+                            color: scheduleEnd.activeFocus ? root.hoverSurface : "transparent"
+                          }
+                          onTextEdited: {
+                            root.scheduleTimeEdited = true
+                            root.scheduleEndDraft = text
+                            root.scheduleFeedback = ""
+                            scheduleAutosave.restart()
+                          }
+                        }
                       }
                     }
                   }
@@ -1134,7 +1144,7 @@ Panel {
                   text: root.scheduleFeedback ? root.scheduleFeedback
                     : root.pendingSchedule ? "Saving…"
                     : root.schedule.weekdays.length === 0 ? "Select a day to enable tracking"
-                    : !root.scheduleAllDay && scheduleStart.text > scheduleEnd.text ? "Ends the following day"
+                    : !root.scheduleAllDay && root.scheduleStartDraft > root.scheduleEndDraft ? "Ends the following day"
                     : ""
                   color: root.mutedText
                   font.pixelSize: Style.font.caption
@@ -1223,13 +1233,18 @@ Panel {
                   if (next !== budgetSetting.current) budgetSetting.set(next, ["budget", String(next)])
                 }
               }
-              Omarchy.TextField {
-                objectName: "appSearch"
+              Loader {
                 width: parent.width
-                foreground: root.textColor
-                placeholderText: "Search"
-                text: root.appSearch
-                onTextEdited: root.appSearch = text
+                active: root.opened && root.page === "manage" && root.manageSection === "apps"
+                sourceComponent: Component {
+                  Omarchy.TextField {
+                    objectName: "appSearch"
+                    foreground: root.textColor
+                    placeholderText: "Search"
+                    text: root.appSearch
+                    onTextEdited: root.appSearch = text
+                  }
+                }
               }
               Row {
                 width: parent.width

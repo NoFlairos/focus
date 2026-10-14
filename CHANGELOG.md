@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.4 — 2026-10-14
+
+- The schedule time and app search fields only exist while shown, so a hidden
+  panel no longer reads the clipboard when it changes.
+
 ## 0.8.3 — 2026-10-14
 
 - The bar no longer shows a "+5 min" chip after a limit: the notification and the

@@ -275,6 +275,19 @@ Item {
  focusPanel.manageSection=""
  widget.snapshot = previous
  }
+ function test_editable_fields_only_while_shown() {
+ focusPanel.page="manage"; focusPanel.manageSection=""; wait(30)
+ compare(findChild(focusPanel, "appSearch"), null)
+ compare(focusPanel.scheduleFields.length, 0)
+ focusPanel.manageSection="schedule"; wait(30)
+ compare(focusPanel.scheduleFields.length, 2)
+ focusPanel.close(); wait(30)
+ compare(focusPanel.scheduleFields.length, 0)
+ focusPanel.open(); focusPanel.manageSection="apps"; wait(30)
+ verify(findChild(focusPanel, "appSearch") !== null)
+ focusPanel.manageSection=""; wait(30)
+ compare(findChild(focusPanel, "appSearch"), null)
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
