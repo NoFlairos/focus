@@ -35,9 +35,7 @@ BarWidget {
     .indexOf(connectionStatus) >= 0 ? connectionLabel : ""
   readonly property double focusUntil: Number(snapshot.focus_until || 0) * 1000
   readonly property bool trackingPaused: snapshot.paused === true || snapshot.working === false
-  // Entries a limit just stopped: offered "+5 min" for two minutes (see the agent's limit_prompts).
-  readonly property var limitPrompts: snapshot.limit_prompts || []
-  readonly property bool hasChips: visibleTargets.length > 0 || limitPrompts.length > 0
+  readonly property bool hasChips: visibleTargets.length > 0
   readonly property var visibleTargets: (snapshot.tracked || []).filter(function(target) {
     return Number(target.visible_windows || 0) > 0
   })
@@ -143,9 +141,6 @@ BarWidget {
       : root.focusUntil > root.statusNow ? "Focus session · until " + Qt.formatTime(new Date(root.focusUntil), "HH:mm")
       : root.trackingPaused ? "Focus · tracking paused"
       + (root.snapshot.idle && !root.snapshot.paused ? " while idle" : "")
-      : root.limitPrompts.length ? root.limitPrompts.map(function(entry) {
-        return entry.name + " · limit reached"
-      }).join("\n") + "\nClick for 5 more minutes."
       : root.visibleTargets.length ? root.visibleTargets.map(function(target) {
       return root.appLabel(target) + (target.category === "consumption"
         ? " · " + root.remainingLabel(target.remaining_seconds) + " left" : "")
@@ -153,10 +148,6 @@ BarWidget {
     onPressed: function(buttonCode) {
       if (buttonCode !== Qt.LeftButton) return
       if (root.connectionIssue && !root.opened) root.showDiagnostics()
-      else if (root.limitPrompts.length && !root.opened && panelItem) {
-        panelItem.page = "now"
-        root.open()
-      }
       else root.toggle()
     }
 
@@ -240,42 +231,6 @@ BarWidget {
         id: chips
         anchors.verticalCenter: parent.verticalCenter
         spacing: Style.space(5)
-
-        Repeater {
-          model: root.limitPrompts
-          delegate: Rectangle {
-            required property var modelData
-            objectName: "barPromptChip"
-            implicitWidth: promptRow.implicitWidth + Style.space(10)
-            height: Style.space(25)
-            radius: Style.cornerRadius
-            color: Qt.rgba(0.9, 0.49, 0.13, 0.18)
-            Row {
-              id: promptRow
-              anchors.centerIn: parent
-              spacing: Style.space(4)
-              Text {
-                width: Math.min(implicitWidth, Style.space(76))
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                text: modelData.name
-                color: button.foreground
-                font.family: button.fontFamily
-                font.pixelSize: button.fontSize
-                font.bold: true
-                elide: Text.ElideRight
-              }
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "· +5 min"
-                color: "#e67e22"
-                font.family: button.fontFamily
-                font.pixelSize: button.fontSize
-                font.bold: true
-              }
-            }
-          }
-        }
 
         Repeater {
           // Count model keeps chips alive across refreshes; data follows by index.

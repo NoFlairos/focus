@@ -1,10 +1,14 @@
 # Changelog
 
+## 0.8.3 — 2026-10-14
+
+- The bar no longer shows a "+5 min" chip after a limit: the notification and the
+  *Limit reached* block in Now are enough.
+
 ## 0.8.2 — 2026-10-14
 
 - **5 more minutes is reachable:** Omarchy notifications show no action buttons, so
-  clicking the limit notification itself now grants the extension. For two minutes
-  after a limit, the bar also shows a "+5 min" chip that opens Now.
+  clicking the limit notification itself now grants the extension.
 
 ## 0.8.1 — 2026-10-14
 

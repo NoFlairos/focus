@@ -102,14 +102,6 @@ Item {
  compare(focusBar.connectionIssue, "")
  verify(!indicator.visible)
  }
- function test_bar_prompt_chip() {
- focusBar.snapshot = {working:true, tracked:[], limit_prompts:[{id:"site:youtube.com",name:"YouTube"}]}
- wait(30)
- var chip = findChild(focusBar, "barPromptChip")
- verify(chip !== null && chip.visible)
- verify(!findChild(focusBar, "focusLogo").visible)
- focusBar.snapshot = {tracked:[]}
- }
  function test_bar_logo_states() {
  var now = Date.now()
  focusBar.statusNow = now
