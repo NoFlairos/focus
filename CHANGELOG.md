@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — 2026-10-14
+
+- **5 more minutes is reachable:** Omarchy notifications show no action buttons, so
+  clicking the limit notification itself now grants the extension. For two minutes
+  after a limit, the bar also shows a "+5 min" chip that opens Now.
+
 ## 0.8.1 — 2026-10-14
 
 - **Lighter on the system:** the live status is kept in memory instead of being

@@ -333,14 +333,14 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
         self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
         process = mock.Mock()
-        process.communicate.return_value = ("snooze\n", "")
+        process.communicate.return_value = ("default\n", "")
         threads = []
         with mock.patch.object(agent.subprocess, "Popen", return_value=process) as popen, \
                 mock.patch.object(agent.threading, "Thread", side_effect=lambda target, daemon: threads.append(target) or mock.Mock()):
             self.runtime.tick(61)
         command = popen.call_args.args[0]
-        self.assertIn("Test closed.", command)
-        self.assertEqual(command[-2:], ["-A", "snooze=5 more minutes"])
+        self.assertIn("Test closed. Click for 5 more minutes.", command)
+        self.assertEqual(command[-2:], ["-A", "default=5 more minutes"])
         threads[-1]()
         self.assertEqual(self.runtime.config["snoozes"][target], agent.current_hour_bucket(dt.datetime.now().astimezone()))
 
@@ -1189,8 +1189,8 @@ class AgentTests(unittest.TestCase):
         notify.assert_called_once()
         args = notify.call_args.args[0]
         self.assertIn("Time limit reached · Test", args)
-        self.assertIn("Test stays open.", args)
-        self.assertEqual(args[-2:], ["-A", "snooze=5 more minutes"])
+        self.assertIn("Test stays open. Click for 5 more minutes.", args)
+        self.assertEqual(args[-2:], ["-A", "default=5 more minutes"])
 
     def test_reclassification_keeps_quota_edit(self):
         target = "app:test"

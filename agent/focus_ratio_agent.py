@@ -723,10 +723,13 @@ class Runtime:
 
     def notify(self, title: str, body: str, snooze_target: str = "") -> None:
         """Desktop notification; a limit notification offers one 5-minute extension."""
+        if snooze_target:
+            body += " Click for 5 more minutes."
         command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, body]
         if snooze_target:
-            # Critical is the only urgency Omarchy keeps on screen until the user acts.
-            command += ["-u", "critical", "-A", "snooze=5 more minutes"]
+            # Omarchy shows no action buttons; clicking a notification runs its "default"
+            # action. Critical is the only urgency it keeps on screen until the user acts.
+            command += ["-u", "critical", "-A", "default=5 more minutes"]
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE if snooze_target else subprocess.DEVNULL,
                                        stderr=subprocess.DEVNULL, text=True)
@@ -741,7 +744,7 @@ class Runtime:
             except (OSError, ValueError, subprocess.TimeoutExpired):
                 process.kill()
                 return
-            if str(choice).strip() == "snooze":
+            if str(choice).strip() == "default":
                 self.handle_message({"op": "snooze", "target_id": snooze_target})
 
         threading.Thread(target=wait_for_action, daemon=True).start()
