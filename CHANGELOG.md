@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5 — 2026-10-15
+
+- No native text field remains, so the panel never reads the clipboard:
+  schedule times use −/+ buttons (15 minutes, the wheel works too) and Search
+  reads typed keys directly. Pasting into Search is no longer possible.
+
 ## 0.8.4 — 2026-10-14
 
 - The schedule time and app search fields only exist while shown, so a hidden

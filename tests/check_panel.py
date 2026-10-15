@@ -27,7 +27,7 @@ QtObject {property string path; property bool watchChanges; property bool printE
 QtObject {property var command: []; property bool running: false; signal exited(int exitCode)}''')})
 module('qs.Commons',{
 'Style':(True,'''import QtQuick
-QtObject { property var bar: ({iconFont: 13, iconSlot: 27}); property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function space(n) {return n;} function spaceReal(n) {return n;} }'''),
+QtObject { property var bar: ({iconFont: 13, iconSlot: 27}); property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function controlFill(f,h,fg,a) {return "transparent";} function controlBorder(f,h,fg,a) {return "gray";} function space(n) {return n;} function spaceReal(n) {return n;} }'''),
 'Color':(True,'''import QtQuick
 QtObject { property color accent: "#7aa2f7"; property var popups: ({text: Qt.rgba(0.9,0.9,0.9,1), background: Qt.rgba(0.12,0.12,0.12,1)}) }''')})
 module('qs.Ui',{
@@ -49,7 +49,7 @@ Item { property string moduleName; property bool manageIpc; property bool opened
 'KeyboardPanel':(False,'''import QtQuick
 Item { property var anchorItem; property var owner; property var bar; property bool open; property var focusTarget; property real contentWidth; property real contentHeight; width:contentWidth; height:contentHeight; function fittedContentWidth(n){return n;} function fittedContentHeight(n){return n;} }'''),
 'PanelKeyCatcher':(False,'''import QtQuick
-Item { signal closeRequested(); signal tabRequested(int direction); }''')})
+Item { property bool blocked: false; signal closeRequested(); signal tabRequested(int direction); }''')})
 shutil.copyfile('Panel.qml',root/'FocusPanel.qml')
 shutil.copyfile('Panel.qml',root/'Panel.qml')
 shutil.copyfile('BarWidget.qml',root/'FocusBar.qml')
@@ -275,18 +275,28 @@ Item {
  focusPanel.manageSection=""
  widget.snapshot = previous
  }
- function test_editable_fields_only_while_shown() {
- focusPanel.page="manage"; focusPanel.manageSection=""; wait(30)
- compare(findChild(focusPanel, "appSearch"), null)
- compare(focusPanel.scheduleFields.length, 0)
- focusPanel.manageSection="schedule"; wait(30)
- compare(focusPanel.scheduleFields.length, 2)
- focusPanel.close(); wait(30)
- compare(focusPanel.scheduleFields.length, 0)
- focusPanel.open(); focusPanel.manageSection="apps"; wait(30)
- verify(findChild(focusPanel, "appSearch") !== null)
- focusPanel.manageSection=""; wait(30)
- compare(findChild(focusPanel, "appSearch"), null)
+ function test_no_clipboard_reading_fields() {
+ focusPanel.page="manage"; focusPanel.manageSection="schedule"; wait(30)
+ var start=findChild(focusPanel, "scheduleStart")
+ verify(start !== null)
+ verify(start.label === "Tracking start time")
+ focusPanel.scheduleStartDraft="08:00"
+ start.step(1); compare(focusPanel.scheduleStartDraft, "08:15")
+ focusPanel.scheduleStartDraft="09:10"
+ start.step(-1); compare(focusPanel.scheduleStartDraft, "09:00")
+ focusPanel.scheduleStartDraft="00:00"
+ start.step(-1); compare(focusPanel.scheduleStartDraft, "23:45")
+ focusPanel.scheduleStartDraft="08:00"; focusPanel.scheduleTimeEdited=false
+ focusPanel.manageSection="apps"; wait(30)
+ var search=findChild(focusPanel, "appSearch")
+ search.forceActiveFocus()
+ keyClick("h"); keyClick("j"); keyClick("x")
+ compare(focusPanel.appSearch, "hjx")
+ keyClick(Qt.Key_Backspace); compare(focusPanel.appSearch, "hj")
+ keyClick(Qt.Key_Escape)
+ verify(!search.activeFocus)
+ verify(focusPanel.opened)
+ focusPanel.appSearch=""; focusPanel.manageSection=""
  }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")

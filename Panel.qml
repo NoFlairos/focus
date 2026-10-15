@@ -161,7 +161,7 @@ Panel {
       font.pixelSize: Style.font.caption
     }
     onClicked: {
-      root.finishScheduleEditing()
+      root.finishEditing()
       root.manageSection = root.manageSection === section ? "" : section
     }
   }
@@ -200,6 +200,96 @@ Panel {
       width: Style.space(30); height: parent.height; horizontalPadding: 0
       text: "+"; foreground: root.textColor; fontSize: Style.font.body; bordered: true; focusable: true
       onClicked: stepper.step(1)
+    }
+  }
+
+  // −/+ around a time; the wheel steps too. Not a text field, so the clipboard is never read.
+  component TimeStepper: Row {
+    id: timeStepper
+    property string label
+    property string value
+    signal step(int direction)
+    height: parent ? parent.height : 0
+    Accessible.name: label
+    WheelHandler {
+      acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+      onWheel: function(event) { if (event.angleDelta.y !== 0) timeStepper.step(event.angleDelta.y > 0 ? 1 : -1) }
+    }
+    Omarchy.Button {
+      id: timeMinus
+      width: Style.space(30); height: parent.height; horizontalPadding: 0
+      text: "−"; tooltipText: "15 minutes earlier"; foreground: root.textColor; fontSize: Style.font.body; focusable: true
+      onClicked: timeStepper.step(-1)
+    }
+    Text {
+      width: timeStepper.width - timeMinus.width * 2; height: parent.height
+      text: timeStepper.value
+      color: root.textColor; font.family: "monospace"; font.pixelSize: Style.font.body
+      horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+    }
+    Omarchy.Button {
+      width: Style.space(30); height: parent.height; horizontalPadding: 0
+      text: "+"; tooltipText: "15 minutes later"; foreground: root.textColor; fontSize: Style.font.body; focusable: true
+      onClicked: timeStepper.step(1)
+    }
+  }
+
+  // Search input that reads typed keys only. A TextField would fetch foreign
+  // clipboard text on every clipboard change, even without a paste.
+  component SearchBox: Rectangle {
+    id: searchBox
+    readonly property bool hot: searchHover.hovered
+    width: parent ? parent.width : 0
+    height: Style.space(32)
+    radius: Style.cornerRadius
+    color: Style.controlFill(activeFocus, hot, root.textColor, Color.accent)
+    border.width: Style.spacing.hairline
+    border.color: Style.controlBorder(activeFocus, hot, root.textColor, Color.accent)
+    Accessible.role: Accessible.EditableText
+    Accessible.name: "Search"
+    Text {
+      id: searchText
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: Style.space(10)
+      anchors.rightMargin: Style.space(10)
+      text: root.appSearch || (searchBox.activeFocus ? "" : "Search")
+      color: root.appSearch ? root.textColor : root.mutedText
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+      elide: Text.ElideLeft
+    }
+    Rectangle {
+      visible: searchBox.activeFocus
+      x: searchText.x + Math.min(searchText.contentWidth, searchText.width) + 1
+      anchors.verticalCenter: parent.verticalCenter
+      width: 1
+      height: Style.font.body + Style.space(2)
+      color: root.textColor
+      SequentialAnimation on opacity {
+        running: searchBox.activeFocus
+        loops: Animation.Infinite
+        NumberAnimation { to: 0; duration: 0 }
+        PauseAnimation { duration: 530 }
+        NumberAnimation { to: 1; duration: 0 }
+        PauseAnimation { duration: 530 }
+      }
+    }
+    HoverHandler { id: searchHover; cursorShape: Qt.IBeamCursor }
+    TapHandler { onTapped: searchBox.forceActiveFocus() }
+    Keys.onPressed: function(event) {
+      var shortcut = event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
+      if (event.key === Qt.Key_Escape || event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab) {
+        root.finishEditing()
+      } else if (event.key === Qt.Key_Backspace) {
+        root.appSearch = shortcut ? "" : root.appSearch.slice(0, -1)
+      } else if (!shortcut && event.text >= " " && event.text !== "\u007f") {
+        root.appSearch += event.text
+      } else {
+        return
+      }
+      event.accepted = true
     }
   }
 
@@ -298,8 +388,6 @@ Panel {
   property var scheduleDraft: null
   property var pendingSchedule: null
   property string scheduleFeedback: ""
-  // Editable fields only exist while shown: a hidden TextField still fetches the clipboard on every change.
-  readonly property var scheduleFields: scheduleTimes.item ? [scheduleTimes.item.start, scheduleTimes.item.end] : []
   readonly property var schedule: scheduleDraft || savedSchedule
   readonly property color textColor: Color.popups.text
   readonly property color solidPopup: Qt.rgba(Color.popups.background.r,
@@ -565,10 +653,22 @@ Panel {
     setSchedule({ weekdays: days, start: schedule.start, end: schedule.end })
   }
 
-  function finishScheduleEditing() {
-    scheduleFields.forEach(function(field) { field.deselect() })
-    if (scheduleFields.some(function(field) { return field.activeFocus }))
-      keyCatcher.forceActiveFocus()
+  function finishEditing() {
+    if (appSearchBox.activeFocus) keyCatcher.forceActiveFocus()
+  }
+
+  // Times move by 15 minutes and wrap around midnight; an off-grid time snaps to the grid first.
+  function stepScheduleTime(which, direction) {
+    var parts = (which === "start" ? scheduleStartDraft : scheduleEndDraft).split(":")
+    var minutes = Number(parts[0]) * 60 + Number(parts[1])
+    minutes = direction > 0 ? Math.floor(minutes / 15) * 15 + 15 : Math.ceil(minutes / 15) * 15 - 15
+    minutes = (minutes + 1440) % 1440
+    var next = String(Math.floor(minutes / 60)).padStart(2, "0") + ":" + String(minutes % 60).padStart(2, "0")
+    if (which === "start") scheduleStartDraft = next
+    else scheduleEndDraft = next
+    scheduleTimeEdited = true
+    scheduleFeedback = ""
+    scheduleAutosave.restart()
   }
 
   function saveSchedule(explicit) {
@@ -682,14 +782,11 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: appSearchBox.activeFocus
       TapHandler {
         onTapped: function(eventPoint, button) {
-          var fields = root.scheduleFields
-          for (var i = 0; i < fields.length; i++) {
-            var point = fields[i].mapFromItem(keyCatcher, eventPoint.position.x, eventPoint.position.y)
-            if (fields[i].visible && fields[i].contains(point)) return
-          }
-          root.finishScheduleEditing()
+          var point = appSearchBox.mapFromItem(keyCatcher, eventPoint.position.x, eventPoint.position.y)
+          if (!(appSearchBox.visible && appSearchBox.contains(point))) root.finishEditing()
         }
       }
       onCloseRequested: {
@@ -1040,7 +1137,7 @@ Panel {
                       focusable: true
                       enabled: !root.pendingSchedule
                       onClicked: {
-                          root.finishScheduleEditing()
+                          root.finishEditing()
                           root.scheduleAllDayDraft = index === 0
                           root.scheduleTimeEdited = true
                           if (index === 1 && root.scheduleStartDraft === root.scheduleEndDraft) {
@@ -1060,80 +1157,31 @@ Panel {
                   height: Style.space(42)
                   radius: Style.cornerRadius
                   color: root.softSurface
-                  Loader {
-                    id: scheduleTimes
+                  Row {
                     anchors.fill: parent
-                    active: root.opened && root.page === "manage" && root.manageSection === "schedule"
-                      && !root.scheduleAllDay
-                    sourceComponent: Component {
-                      Row {
-                        readonly property Item start: scheduleStart
-                        readonly property Item end: scheduleEnd
-                        TextField {
-                          id: scheduleStart
-                          width: (parent.width - timeSeparator.width) / 2
-                          height: parent.height
-                          enabled: !root.pendingSchedule
-                          text: root.scheduleStartDraft
-                          maximumLength: 5
-                          horizontalAlignment: Text.AlignHCenter
-                          verticalAlignment: Text.AlignVCenter
-                          font.family: "monospace"
-                          font.pixelSize: Style.font.body
-                          color: root.textColor
-                          selectByMouse: true
-                          Accessible.name: "Tracking start time"
-                          onAccepted: root.saveSchedule(true)
-                          onEditingFinished: root.saveSchedule(true)
-                          background: Rectangle {
-                            radius: Style.cornerRadius
-                            color: scheduleStart.activeFocus ? root.hoverSurface : "transparent"
-                          }
-                          onTextEdited: {
-                            root.scheduleTimeEdited = true
-                            root.scheduleStartDraft = text
-                            root.scheduleFeedback = ""
-                            scheduleAutosave.restart()
-                          }
-                        }
-                        Text {
-                          id: timeSeparator
-                          width: Style.space(24)
-                          height: parent.height
-                          text: "→"
-                          horizontalAlignment: Text.AlignHCenter
-                          verticalAlignment: Text.AlignVCenter
-                          color: root.mutedText
-                          font.pixelSize: Style.font.bodySmall
-                        }
-                        TextField {
-                          id: scheduleEnd
-                          width: (parent.width - timeSeparator.width) / 2
-                          height: parent.height
-                          enabled: !root.pendingSchedule
-                          text: root.scheduleEndDraft
-                          maximumLength: 5
-                          horizontalAlignment: Text.AlignHCenter
-                          verticalAlignment: Text.AlignVCenter
-                          font.family: "monospace"
-                          font.pixelSize: Style.font.body
-                          color: root.textColor
-                          selectByMouse: true
-                          Accessible.name: "Tracking end time"
-                          onAccepted: root.saveSchedule(true)
-                          onEditingFinished: root.saveSchedule(true)
-                          background: Rectangle {
-                            radius: Style.cornerRadius
-                            color: scheduleEnd.activeFocus ? root.hoverSurface : "transparent"
-                          }
-                          onTextEdited: {
-                            root.scheduleTimeEdited = true
-                            root.scheduleEndDraft = text
-                            root.scheduleFeedback = ""
-                            scheduleAutosave.restart()
-                          }
-                        }
-                      }
+                    TimeStepper {
+                      objectName: "scheduleStart"
+                      width: (parent.width - timeSeparator.width) / 2
+                      label: "Tracking start time"
+                      value: root.scheduleStartDraft
+                      onStep: function(direction) { root.stepScheduleTime("start", direction) }
+                    }
+                    Text {
+                      id: timeSeparator
+                      width: Style.space(24)
+                      height: parent.height
+                      text: "→"
+                      horizontalAlignment: Text.AlignHCenter
+                      verticalAlignment: Text.AlignVCenter
+                      color: root.mutedText
+                      font.pixelSize: Style.font.bodySmall
+                    }
+                    TimeStepper {
+                      objectName: "scheduleEnd"
+                      width: (parent.width - timeSeparator.width) / 2
+                      label: "Tracking end time"
+                      value: root.scheduleEndDraft
+                      onStep: function(direction) { root.stepScheduleTime("end", direction) }
                     }
                   }
                 }
@@ -1233,18 +1281,9 @@ Panel {
                   if (next !== budgetSetting.current) budgetSetting.set(next, ["budget", String(next)])
                 }
               }
-              Loader {
-                width: parent.width
-                active: root.opened && root.page === "manage" && root.manageSection === "apps"
-                sourceComponent: Component {
-                  Omarchy.TextField {
-                    objectName: "appSearch"
-                    foreground: root.textColor
-                    placeholderText: "Search"
-                    text: root.appSearch
-                    onTextEdited: root.appSearch = text
-                  }
-                }
+              SearchBox {
+                id: appSearchBox
+                objectName: "appSearch"
               }
               Row {
                 width: parent.width
@@ -2238,7 +2277,7 @@ Panel {
             bordered: true
             focusable: true
             onClicked: {
-              root.finishScheduleEditing()
+              root.finishEditing()
               flick.cancelFlick()
               scrollJump.stop()
               glide.stop()
