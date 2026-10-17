@@ -285,7 +285,7 @@ def visible_clients() -> list[dict[str, Any]]:
             continue
         if len(size) < 2 or int(size[0]) <= 0 or int(size[1]) <= 0:
             continue
-        app_id = str(client.get("class") or client.get("initialClass") or "").strip()
+        app_id = str(client.get("class") or client.get("initialClass") or "").strip()[:120]
         address = str(client.get("address") or "")
         if not app_id or not address or app_id.casefold() in IGNORED_APP_IDS:
             continue

@@ -40,8 +40,8 @@ Item {property string label; property string description; property bool checked;
 'TextField':(False,'''import QtQuick
 import QtQuick.Controls as Controls
 Controls.TextField { property color foreground; }'''),
-'SearchableDropdown':(False,'''import QtQuick
-Item { property string label; property string value; property var options: []; property bool showLabel; property color foreground; property color background; property string placeholderText; property string emptyText; property string triggerLabel; property bool popupOpen: false; signal changed(string value); implicitHeight: 32; function open(){popupOpen=true;} function close(){popupOpen=false;} }'''),
+'Dropdown':(False,'''import QtQuick
+Item { property string label; property string value; property var options: []; property bool showLabel; property color foreground; property color background; property bool popupOpen: false; signal changed(string value); implicitHeight: 32; function currentLabel(){return value;} function open(){popupOpen=true;} function close(){popupOpen=false;} }'''),
 'Button':(False,'''import QtQuick
 Item { property string text; property string tooltipText; signal clicked(); implicitHeight: 32; property color foreground; property color background; property bool bordered; property bool focusable; property bool leftAlign; property bool selected; property real fontSize; property real horizontalPadding; }'''),
 'Panel':(False,'''import QtQuick
@@ -298,6 +298,18 @@ Item {
  verify(focusPanel.opened)
  focusPanel.appSearch=""; focusPanel.manageSection=""
  }
+ function test_export_folder_is_focus_only() {
+ var previous = widget.snapshot
+ widget.snapshot = Object.assign({}, previous, {data_action:{path:"/home/u/.local/state/focus-ratio/exports/export_history-1.csv"}})
+ compare(focusPanel.exportFolder, "/home/u/.local/state/focus-ratio/exports")
+ widget.snapshot = Object.assign({}, previous, {data_action:{path:"/etc/passwd"}})
+ compare(focusPanel.exportFolder, "")
+ widget.snapshot = Object.assign({}, previous, {data_action:{path:"--help/focus-ratio/exports/a.csv"}})
+ compare(focusPanel.exportFolder, "")
+ widget.snapshot = Object.assign({}, previous, {data_action:{path:"/x/../focus-ratio/exports/a.csv"}})
+ compare(focusPanel.exportFolder, "")
+ widget.snapshot = previous
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
@@ -356,8 +368,10 @@ Item {
  verify(picker !== null)
  compare(picker.options.length, 1)
  compare(picker.options[0].label, "Two")
+ compare(picker.currentLabel(), "Merge into…")
  picker.value = "app:two"
  compare(picker.currentIndex, 0)
+ compare(picker.currentLabel(), "Two")
  focusPanel.expandedCardId=""
  focusPanel.pendingExcluded=[]
 

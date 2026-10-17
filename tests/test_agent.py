@@ -1248,5 +1248,11 @@ class AgentTests(unittest.TestCase):
                             for row in self.runtime.latest_state["tracked"]))
 
 
+    def test_long_app_class_is_capped(self):
+        client = {"class": "x" * 5000, "address": "0x998", "workspace": {"id": 1}, "size": [400, 300]}
+        with mock.patch.object(agent, "hypr_json", side_effect=lambda command:
+                               [{"activeWorkspace": {"id": 1}}] if command == "monitors" else [client]):
+            self.assertEqual(ORIGINAL_VISIBLE_CLIENTS()[0]["app_id"], "x" * 120)
+
 if __name__ == "__main__":
     unittest.main()

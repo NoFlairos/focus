@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.6 — 2026-10-17
+
+- *Merge into…* is a plain list without a search field, so no part of the panel
+  reads the clipboard. Entries show their address when it differs from the name.
+- App names from Hyprland are capped at 120 characters, like site names.
+- *Open export folder* only opens Focus's own export folder.
+
 ## 0.8.5 — 2026-10-15
 
 - No native text field remains, so the panel never reads the clipboard:

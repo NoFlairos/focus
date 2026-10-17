@@ -41,6 +41,12 @@ Panel {
   property string dataFeedback: ""
   property string dataBeforeId: ""
   readonly property var dataAction: widget && widget.snapshot ? widget.snapshot.data_action || ({}) : ({})
+  // Only Focus's own export folder is ever handed to xdg-open.
+  readonly property string exportFolder: {
+    var path = String(dataAction.path || "")
+    var folder = path.slice(0, path.lastIndexOf("/"))
+    return /^\/[^\n]*\/focus-ratio\/exports$/.test(folder) && folder.indexOf("/../") < 0 ? folder : ""
+  }
   readonly property var weekly: widget && widget.snapshot ? widget.snapshot.weekly || ({}) : ({})
   readonly property var suggestions: widget && widget.snapshot ? widget.snapshot.suggestions || [] : []
   readonly property var subdomainRules: widget && widget.snapshot ? widget.snapshot.subdomain_rules || ({}) : ({})
@@ -324,18 +330,19 @@ Panel {
     }
   }
 
-  component TargetPicker: Omarchy.SearchableDropdown {
+  // Plain list without a filter field: SearchableDropdown embeds a TextField, which reads the clipboard.
+  component TargetPicker: Omarchy.Dropdown {
     property var model: []
+    property string triggerLabel: "Choose an entry"
     readonly property int currentIndex: model.findIndex(function(entry) { return entry.id === value })
     showLabel: false
     foreground: root.textColor
     background: root.solidPopup
-    placeholderText: "Search apps or sites…"
-    emptyText: "No matching entry"
-    triggerLabel: value ? "" : "Choose an entry"
     options: model.map(function(entry) {
-      return { value: entry.id, label: entry.name, description: entry.identity }
+      var same = entry.name.toLowerCase() === entry.identity.toLowerCase()
+      return { value: entry.id, label: same ? entry.name : entry.name + " · " + entry.identity }
     })
+    function currentLabel() { return currentIndex >= 0 ? options[currentIndex].label : triggerLabel }
   }
 
   Timer {
@@ -1686,7 +1693,7 @@ Panel {
                           id: mergePicker
                           objectName: "mergePicker"
                           width: parent.width - mergeButton.width - parent.spacing
-                          triggerLabel: value ? "" : "Merge into…"
+                          triggerLabel: "Merge into…"
                           model: root.tracked.filter(function(row) {
                             return row.configured && row.id !== targetCard.targetId && root.ignoredTargets.indexOf(row.id) < 0
                           }).map(function(row) {
@@ -1939,12 +1946,12 @@ Panel {
                 wrapMode: Text.WordWrap
               }
               Omarchy.Button {
-                visible: !!root.dataAction.path
+                visible: root.exportFolder !== ""
                 text: "Open export folder"
                 foreground: root.textColor
                 fontSize: Style.font.bodySmall
                 focusable: true
-                onClicked: Quickshell.execDetached(["xdg-open", root.dataAction.path.slice(0, root.dataAction.path.lastIndexOf("/"))])
+                onClicked: Quickshell.execDetached(["xdg-open", root.exportFolder])
               }
               Omarchy.Button {
                 text: root.confirmClearHistory ? "Cancel" : "Clear history…"
