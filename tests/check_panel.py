@@ -48,8 +48,26 @@ Item { property string text; property string tooltipText; signal clicked(); impl
 Item { property string moduleName; property bool manageIpc; property bool opened: true; property var bar: null; function open() {opened=true;} function close() {opened=false;} }'''),
 'KeyboardPanel':(False,'''import QtQuick
 Item { property var anchorItem; property var owner; property var bar; property bool open; property var focusTarget; property real contentWidth; property real contentHeight; width:contentWidth; height:contentHeight; function fittedContentWidth(n){return n;} function fittedContentHeight(n){return n;} }'''),
+'PanelToolTip':(False,'''import QtQuick
+import QtQuick.Controls
+ToolTip { id: tip; contentItem: Text { textFormat: Text.PlainText; text: tip.text } }'''),
 'PanelKeyCatcher':(False,'''import QtQuick
 Item { property bool blocked: false; signal closeRequested(); signal tabRequested(int direction); }''')})
+# Qt's attached ToolTip renders markup; app and site names must only reach PlainText tooltips.
+for source in ('Panel.qml','BarWidget.qml'):
+ assert 'ToolTip.' not in Path(source).read_text(), source+' uses an attached ToolTip'
+# Text defaults to AutoText, which renders markup: every Text must state PlainText.
+import re
+for source in ('Panel.qml','BarWidget.qml','FocusMark.qml'):
+ lines=Path(source).read_text().split('\n')
+ for i,line in enumerate(lines):
+  if not re.search(r'(^|[\s:])Text \{',line): continue
+  depth=0; plain=False
+  for j in range(i,len(lines)):
+   if (depth==1 or j==i) and 'textFormat: Text.PlainText' in lines[j]: plain=True
+   depth+=lines[j].count('{')-lines[j].count('}')
+   if depth<=0: break
+  assert plain, '%s:%d Text without textFormat: Text.PlainText' % (source,i+1)
 shutil.copyfile('Panel.qml',root/'FocusPanel.qml')
 shutil.copyfile('Panel.qml',root/'Panel.qml')
 shutil.copyfile('BarWidget.qml',root/'FocusBar.qml')

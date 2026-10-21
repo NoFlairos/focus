@@ -166,6 +166,7 @@ BarWidget {
       border.color: button.activeColor
 
       Text {
+        textFormat: Text.PlainText
         anchors.centerIn: parent
         text: "!"
         color: button.activeColor
@@ -181,6 +182,7 @@ BarWidget {
     // An invisible reference glyph, laid out like BarIconButton's, gives their
     // painted centre so the mark lines up with neighbouring icons in any font.
     Text {
+      textFormat: Text.PlainText
       id: iconReference
       visible: false
       anchors.centerIn: parent
@@ -271,6 +273,7 @@ BarWidget {
                 elide: Text.ElideRight
               }
               Text {
+                textFormat: Text.PlainText
                 visible: modelData.category === "consumption"
                 anchors.verticalCenter: parent.verticalCenter
                 text: visible ? "· " + root.remainingLabel(modelData.remaining_seconds) : ""

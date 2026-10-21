@@ -13,6 +13,7 @@ import csv
 import ctypes
 import datetime as dt
 import functools
+import html
 import json
 import ipaddress
 import os
@@ -725,7 +726,8 @@ class Runtime:
         """Desktop notification; a limit notification offers one 5-minute extension."""
         if snooze_target:
             body += " Click for 5 more minutes."
-        command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, body]
+        # Bodies may be rendered as markup; names come from apps and sites.
+        command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, html.escape(body, quote=False)]
         if snooze_target:
             # Omarchy shows no action buttons; clicking a notification runs its "default"
             # action. Critical is the only urgency it keeps on screen until the user acts.

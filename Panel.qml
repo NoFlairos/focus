@@ -151,6 +151,7 @@ Panel {
     fontSize: Style.font.bodySmall
     focusable: true
     Text {
+      textFormat: Text.PlainText
       anchors.right: parent.right
       anchors.rightMargin: Style.space(12)
       anchors.verticalCenter: parent.verticalCenter
@@ -159,6 +160,7 @@ Panel {
       font.pixelSize: Style.font.body
     }
     Text {
+      textFormat: Text.PlainText
       anchors.right: parent.right
       anchors.rightMargin: Style.space(34)
       anchors.verticalCenter: parent.verticalCenter
@@ -185,8 +187,8 @@ Panel {
     Column {
       width: stepper.width - stepMinus.width - stepValue.width - stepPlus.width - stepper.spacing * 3
       anchors.verticalCenter: parent.verticalCenter
-      Text { width: parent.width; text: stepper.label; color: root.textColor; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
-      Text { width: parent.width; visible: text.length > 0; text: stepper.hint; color: root.mutedText; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+      Text { textFormat: Text.PlainText; width: parent.width; text: stepper.label; color: root.textColor; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+      Text { textFormat: Text.PlainText; width: parent.width; visible: text.length > 0; text: stepper.hint; color: root.mutedText; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
     }
     Omarchy.Button {
       id: stepMinus
@@ -195,6 +197,7 @@ Panel {
       onClicked: stepper.step(-1)
     }
     Text {
+      textFormat: Text.PlainText
       id: stepValue
       width: Style.space(52); height: parent.height
       text: stepper.valueText
@@ -228,6 +231,7 @@ Panel {
       onClicked: timeStepper.step(-1)
     }
     Text {
+      textFormat: Text.PlainText
       width: timeStepper.width - timeMinus.width * 2; height: parent.height
       text: timeStepper.value
       color: root.textColor; font.family: "monospace"; font.pixelSize: Style.font.body
@@ -254,6 +258,7 @@ Panel {
     Accessible.role: Accessible.EditableText
     Accessible.name: "Search"
     Text {
+      textFormat: Text.PlainText
       id: searchText
       anchors.left: parent.left
       anchors.right: parent.right
@@ -952,6 +957,7 @@ Panel {
             }
 
             Text {
+              textFormat: Text.PlainText
               id: screenTimeText
               width: parent.width
               text: "Today’s screen time " + (root.today.screen_seconds !== undefined
@@ -964,11 +970,13 @@ Panel {
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
               HoverHandler { id: screenTimeHover }
-              ToolTip.visible: screenTimeHover.hovered
-              ToolTip.delay: 500
-              ToolTip.text: "Visible apps counted once during tracking hours"
-                + (root.today.screen_started_at
-                  ? " · recorded since " + Qt.formatDateTime(new Date(root.today.screen_started_at), "HH:mm") : "")
+              Omarchy.PanelToolTip {
+                visible: screenTimeHover.hovered
+                delay: 500
+                text: "Visible apps counted once during tracking hours"
+                  + (root.today.screen_started_at
+                    ? " · recorded since " + Qt.formatDateTime(new Date(root.today.screen_started_at), "HH:mm") : "")
+              }
             }
 
             Rectangle {
@@ -1008,6 +1016,7 @@ Panel {
               spacing: Style.space(6)
 
               Text {
+                textFormat: Text.PlainText
                 width: (parent.width - parent.spacing * 2) / 3
                 text: "●  Productive  " + root.minutes(root.productiveToday)
                 color: root.productiveColor
@@ -1015,6 +1024,7 @@ Panel {
                 elide: Text.ElideRight
               }
               Text {
+                textFormat: Text.PlainText
                 width: (parent.width - parent.spacing * 2) / 3
                 text: "●  Neutral  " + root.minutes(root.neutralToday)
                 color: root.neutralColor
@@ -1023,6 +1033,7 @@ Panel {
                 elide: Text.ElideRight
               }
               Text {
+                textFormat: Text.PlainText
                 width: (parent.width - parent.spacing * 2) / 3
                 text: "●  Consumed  " + root.minutes(root.consumedToday)
                 color: root.consumptionColor
@@ -1174,6 +1185,7 @@ Panel {
                       onStep: function(direction) { root.stepScheduleTime("start", direction) }
                     }
                     Text {
+                      textFormat: Text.PlainText
                       id: timeSeparator
                       width: Style.space(24)
                       height: parent.height
@@ -1194,6 +1206,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   visible: text.length > 0
                   text: root.scheduleFeedback ? root.scheduleFeedback
@@ -1243,8 +1256,11 @@ Panel {
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                     HoverHandler { id: suggestionHover }
-                    ToolTip.visible: suggestionHover.hovered
-                    ToolTip.text: modelData.source.split(":").slice(1).join(":") + " + " + modelData.destination.split(":").slice(1).join(":")
+                    // Plain text: entry IDs come from apps and sites, and Qt's default tooltip renders markup.
+                    Omarchy.PanelToolTip {
+                      visible: suggestionHover.hovered
+                      text: modelData.source.split(":").slice(1).join(":") + " + " + modelData.destination.split(":").slice(1).join(":")
+                    }
                   }
                   Omarchy.Button {
                     id: suggestionMerge
@@ -1312,6 +1328,7 @@ Panel {
                 }
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 visible: root.matchingAppCount === 0 && root.filteredIgnored.length === 0
                   && (root.appSearch.trim() !== "" || root.appFilter !== "all")
@@ -1343,6 +1360,7 @@ Panel {
                 anchors.margins: Style.space(9)
                 spacing: Style.space(6)
                 Text {
+                  textFormat: Text.PlainText
                   text: "LIMIT REACHED"
                   color: root.consumptionColor
                   font.pixelSize: Style.font.caption
@@ -1615,6 +1633,7 @@ Panel {
                         onChosen: function(id) { targetCard.changeLimitPeriod(id) }
                       }
                       Text {
+                        textFormat: Text.PlainText
                         visible: targetCard.category === "consumption"
                         text: "When limit is reached"
                         color: root.mutedText
@@ -1715,6 +1734,7 @@ Panel {
                       }
 
                       Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         visible: text.length > 0
                         text: root.mergeFeedback || root.detachFeedback
@@ -1778,6 +1798,7 @@ Panel {
                 spacing: Style.space(5)
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: root.page === "review" ? "Everything is classified"
                     : root.page === "manage" ? "No saved apps or sites"
@@ -1860,12 +1881,14 @@ Panel {
               width: parent.width
               spacing: Style.space(8)
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: "Local service · " + (root.serviceConnected ? "Connected" : "Unavailable")
                 color: root.textColor
                 font.pixelSize: Style.font.bodySmall
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: "Browser extension · " + (!root.serviceConnected ? "Unavailable"
                   : root.widget ? root.widget.connectionLabel : "")
@@ -1873,6 +1896,7 @@ Panel {
                 font.pixelSize: Style.font.bodySmall
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: !root.serviceConnected ? "Start the Focus user service or run the local installer."
                   : !root.diagnostics.browser_connected ? "Keep website distractions in check."
@@ -1962,6 +1986,7 @@ Panel {
                 onClicked: root.confirmClearHistory = !root.confirmClearHistory
               }
               Text {
+                textFormat: Text.PlainText
                 visible: root.confirmClearHistory
                 width: parent.width
                 text: "Deletes history and resets limits. Settings and exports stay."
@@ -1993,12 +2018,14 @@ Panel {
               visible: !!root.weekly.current && root.weekly.current.recorded_days > 0
               spacing: Style.space(4)
               Text {
+                textFormat: Text.PlainText
                 text: "LAST 7 DAYS"
                 color: root.mutedText
                 font.pixelSize: Style.font.caption
                 font.bold: true
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: root.weekly.current ? root.formatElapsed(root.weekly.current.screen_seconds) + " screen time"
                   + (root.weekly.screen_delta !== null && root.weekly.screen_delta !== undefined
@@ -2009,6 +2036,7 @@ Panel {
                 font.bold: true
               }
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: root.weekly.current ? root.minutes(root.weekly.current.productive) + " productive  ·  "
                   + root.minutes(root.weekly.current.neutral) + " neutral  ·  " + root.minutes(root.weekly.current.consumption) + " consumed" : ""
@@ -2028,6 +2056,7 @@ Panel {
               width: parent.width
               spacing: Style.space(6)
               Text {
+                textFormat: Text.PlainText
                 text: "WORTH A LIMIT"
                 color: root.mutedText
                 font.pixelSize: Style.font.caption
@@ -2044,7 +2073,7 @@ Panel {
                     width: parent.width - applyLimit.width - dismissLimit.width - parent.spacing * 2
                     anchors.verticalCenter: parent.verticalCenter
                     Text { width: parent.width; text: modelData.name; textFormat: Text.PlainText; color: root.textColor; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideRight }
-                    Text { width: parent.width; text: root.formatElapsed(modelData.week_seconds) + " this week"; color: root.mutedText; font.pixelSize: Style.font.caption }
+                    Text { textFormat: Text.PlainText; width: parent.width; text: root.formatElapsed(modelData.week_seconds) + " this week"; color: root.mutedText; font.pixelSize: Style.font.caption }
                   }
                   Omarchy.Button {
                     id: applyLimit
@@ -2112,11 +2141,13 @@ Panel {
                   height: Style.space(30)
                   spacing: Style.space(10)
                   HoverHandler { id: historyHover }
-                  ToolTip.visible: historyHover.hovered
-                  ToolTip.delay: 400
-                  ToolTip.text: root.minutes(productive) + " productive · " + root.minutes(neutral) + " neutral · "
-                    + root.minutes(consumed) + " consumed"
+                  Omarchy.PanelToolTip {
+                    visible: historyHover.hovered
+                    text: root.minutes(historyRow.productive) + " productive · " + root.minutes(historyRow.neutral) + " neutral · "
+                      + root.minutes(historyRow.consumed) + " consumed"
+                  }
                   Text {
+                    textFormat: Text.PlainText
                     width: Style.space(58)
                     height: parent.height
                     text: Qt.formatDate(new Date(String(historyRow.modelData.day) + "T12:00:00"), "ddd d")
@@ -2152,6 +2183,7 @@ Panel {
                     }
                   }
                   Text {
+                    textFormat: Text.PlainText
                     id: historyTotal
                     width: Style.space(64)
                     height: parent.height
@@ -2198,6 +2230,7 @@ Panel {
                       verticalAlignment: Text.AlignVCenter
                     }
                     Text {
+                      textFormat: Text.PlainText
                       width: Style.space(64)
                       height: parent.height
                       text: root.formatElapsed(modelData.seconds)
@@ -2241,12 +2274,14 @@ Panel {
                 spacing: Style.space(5)
 
                 Text {
+                  textFormat: Text.PlainText
                   text: "No history yet"
                   color: root.textColor
                   font.pixelSize: Style.font.body
                   font.bold: true
                 }
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: "Daily totals will appear here after tracking starts."
                   color: root.mutedText

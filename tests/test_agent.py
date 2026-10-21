@@ -1254,5 +1254,10 @@ class AgentTests(unittest.TestCase):
                                [{"activeWorkspace": {"id": 1}}] if command == "monitors" else [client]):
             self.assertEqual(ORIGINAL_VISIBLE_CLIENTS()[0]["app_id"], "x" * 120)
 
+    def test_notification_body_is_escaped(self):
+        with mock.patch.object(agent.subprocess, "Popen") as popen:
+            self.runtime.notify("Limit", '<img src="http://x/a.png"> & more')
+        self.assertEqual(popen.call_args[0][0][-1], '&lt;img src="http://x/a.png"&gt; &amp; more')
+
 if __name__ == "__main__":
     unittest.main()

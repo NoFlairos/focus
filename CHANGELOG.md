@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.7 — 2026-10-21
+
+- Every text and tooltip is rendered as plain text, so app and site names can
+  never be read as markup; names in notification bodies are escaped.
+
 ## 0.8.6 — 2026-10-17
 
 - *Merge into…* is a plain list without a search field, so no part of the panel
