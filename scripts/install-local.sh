@@ -9,7 +9,10 @@ state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/focus-ratio"
 
 python3 -c 'import ctypes; ctypes.CDLL("libpsl.so.5")' || { printf 'Focus requires libpsl. Install the libpsl package first.\n' >&2; exit 1; }
 
-mkdir -p "$install_dir" "$install_dir/browser" "$install_dir/browser/icons" "$unit_dir" "$config_dir" "$state_dir"
+mkdir -p "$install_dir" "$install_dir/browser" "$install_dir/browser/icons" "$unit_dir"
+# Settings and history are private to the user, including on existing installs.
+mkdir -p -m 0700 "$config_dir" "$state_dir"
+chmod 0700 "$config_dir" "$state_dir"
 install -m 0755 "$repo_dir/agent/focus_ratio_agent.py" "$install_dir/focus_ratio_agent.py"
 install -m 0644 "$repo_dir"/extensions/chromium/*.json "$repo_dir"/extensions/chromium/*.js "$repo_dir"/extensions/chromium/*.html "$install_dir/browser/"
 install -m 0644 "$repo_dir"/extensions/chromium/icons/*.png "$install_dir/browser/icons/"
@@ -25,6 +28,7 @@ ExecStart="$install_dir/focus_ratio_agent.py" --daemon
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
+UMask=0077
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only

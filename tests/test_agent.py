@@ -1,6 +1,7 @@
 """Regression checks for Focus Ratio's local accounting and window matching."""
 
 import datetime as dt
+import os
 import importlib.util
 import pathlib
 import tempfile
@@ -1258,6 +1259,31 @@ class AgentTests(unittest.TestCase):
         with mock.patch.object(agent.subprocess, "Popen") as popen:
             self.runtime.notify("Limit", '<img src="http://x/a.png"> & more')
         self.assertEqual(popen.call_args[0][0][-1], '&lt;img src="http://x/a.png"&gt; &amp; more')
+
+    def test_private_files_never_exist_with_open_modes(self):
+        previous = os.umask(0o022)
+        self.addCleanup(os.umask, previous)
+        agent.CONFIG_DIR.chmod(0o755)
+        agent.DB_PATH.chmod(0o644)
+        stale = agent.CONFIG_PATH.with_suffix(".json.tmp")
+        stale.write_text("old")
+        stale.chmod(0o644)
+        agent.ensure_dirs()
+        self.assertEqual(agent.CONFIG_DIR.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(agent.STATE_DIR.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(agent.DB_PATH.stat().st_mode & 0o777, 0o600)
+        created = []
+        real_open = os.open
+        def recording_open(path, flags, mode=0o777, *args, **kwargs):
+            created.append((pathlib.Path(path), flags & os.O_CREAT and mode))
+            return real_open(path, flags, mode, *args, **kwargs)
+        with mock.patch.object(agent.os, "open", recording_open):
+            agent.save_config(agent.load_config())
+        self.assertIn((stale, 0o600), created)
+        self.assertFalse(stale.exists())
+        self.assertEqual(agent.CONFIG_PATH.stat().st_mode & 0o777, 0o600)
+        response = self.runtime.handle_message({"op": "export_history"})
+        self.assertEqual(pathlib.Path(response["path"]).stat().st_mode & 0o777, 0o600)
 
 if __name__ == "__main__":
     unittest.main()

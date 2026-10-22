@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.8 — 2026-10-22
+
+- Settings, history and exports are private: files are created owner-only from
+  the start, the service runs with `UMask=0077`, and existing folders and files
+  are tightened to 0700/0600 on start and by the installer.
+
 ## 0.8.7 — 2026-10-21
 
 - Every text and tooltip is rendered as plain text, so app and site names can

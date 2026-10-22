@@ -152,9 +152,21 @@ def default_config() -> dict[str, Any]:
 
 
 def ensure_dirs() -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    os.chmod(STATE_DIR, 0o700)
+    """Settings and history are private: owner-only folders, and owner-only files from older installs."""
+    for directory in (CONFIG_DIR, STATE_DIR):
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+    for path in (CONFIG_PATH, DB_PATH, *(DB_PATH.with_name(DB_PATH.name + suffix) for suffix in ("-wal", "-shm", "-journal"))):
+        try:
+            os.chmod(path, 0o600)
+        except FileNotFoundError:
+            pass
+
+
+def create_private(path: pathlib.Path):
+    """Open a new owner-only file; the mode is set at creation, never after the data is written."""
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600),
+                     "w", encoding="utf-8", newline="")
 
 
 def load_config() -> dict[str, Any]:
@@ -185,10 +197,14 @@ def load_config() -> dict[str, Any]:
 
 
 def atomic_json(path: pathlib.Path, value: Any, indent: int | None = 2) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=indent) + "\n", encoding="utf-8")
-    os.chmod(temp, 0o600)
+    try:
+        temp.unlink()  # a leftover from an interrupted write may predate private modes
+    except FileNotFoundError:
+        pass
+    with create_private(temp) as output:
+        output.write(json.dumps(value, ensure_ascii=False, indent=indent) + "\n")
     temp.replace(path)
 
 
@@ -1261,8 +1277,7 @@ class Runtime:
                     if op == "backup_settings":
                         atomic_json(path, self.config)
                     else:
-                        with path.open("x", encoding="utf-8", newline="") as output:
-                            os.chmod(path, 0o600)
+                        with create_private(path) as output:
                             writer = csv.writer(output)
                             writer.writerow(["day", "target", "category", "seconds"])
                             def safe_cell(value):
@@ -1736,6 +1751,7 @@ def main() -> int:
                                                          "weekly-summary", "limit-period"])
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
+    os.umask(0o077)  # history database, journals and anything else created stay owner-only
     ensure_dirs()
     if args.native_host:
         native_host()
