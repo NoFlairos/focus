@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.9 — 2026-10-22
+
+- **About 3× lighter:** a closed panel no longer rebuilds its lists on every
+  update, and the agent resolves links and names once per tick instead of per
+  entry. Measured with one visible app: ~5.6 % of a core → ~1.9 % (shell + agent).
+
 ## 0.8.8 — 2026-10-22
 
 - Settings, history and exports are private: files are created owner-only from

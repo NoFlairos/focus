@@ -85,6 +85,12 @@ def app_display_name(app_id: str) -> str:
 
 
 def target_display_name(target_id: str, saved_name: str = "") -> str:
+    # The snapshot names every entry each second; desktop names refresh every 5 minutes.
+    return cached_display_name(target_id, saved_name, int(time.monotonic() // 300))
+
+
+@functools.lru_cache(maxsize=4096)
+def cached_display_name(target_id: str, saved_name: str, desktop_period: int) -> str:
     raw_id = target_id.split(":", 1)[-1]
     if saved_name and saved_name.casefold() != raw_id.casefold():
         return saved_name
@@ -352,6 +358,7 @@ def current_hour_bucket(now: dt.datetime) -> str:
     return now.replace(minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
 
 
+@functools.lru_cache(maxsize=4096)
 def clean_site_name(name: str) -> str:
     """Drop parenthesised asides such as "X (formerly Twitter)" or "(3) Inbox"."""
     cleaned = " ".join(re.sub(r"\([^()]*\)", " ", name).split()).strip(" -–—|·:")
@@ -1561,12 +1568,15 @@ class Runtime:
                     row["name"] = clean_site_name(self.config["site_names"].get(domain) or domain)
             rows.sort(key=lambda row: row["name"].lower())
             usage_today = self.store.target_today(day)
+            # Each link is resolved once here instead of once per entry.
+            aliases: dict[str, set[str]] = {}
+            for alias in self.config["service_links"]:
+                aliases.setdefault(self.resolve_target_id(alias), set()).add(alias)
             for row in rows:
                 row["today_seconds"] = int(usage_today.get(row["id"], 0))
                 row["review"] = not row["configured"] and (
                     pending.get(row["id"], 0) >= REVIEW_MIN_SECONDS or row["id"] in review_targets)
-                row["members"] = sorted({row["id"]} | {alias for alias in self.config["service_links"]
-                                                       if self.resolve_target_id(alias) == row["id"]})
+                row["members"] = sorted({row["id"]} | aliases.get(row["id"], set()))
                 row["linked"] = len(row["members"]) > 1
                 families = sorted({domain_family(member[5:]) for member in row["members"] if member.startswith("site:")} - {""})
                 row["grouping_scopes"] = families

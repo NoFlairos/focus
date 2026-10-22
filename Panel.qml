@@ -15,7 +15,11 @@ Panel {
   property Item anchorItem: null
   property string page: "now"
   property string manageSection: ""
-  readonly property var snapshot: widget && widget.snapshot ? widget.snapshot : ({})
+  // A closed panel ignores the per-second agent updates and catches up when opened:
+  // rebuilding every list each second is otherwise the largest CPU cost of Focus.
+  readonly property var liveSnapshot: widget && widget.snapshot ? widget.snapshot : ({})
+  property var snapshot: ({})
+  onLiveSnapshotChanged: if (opened) snapshot = liveSnapshot
   // A setting shown at its new value at once, until the agent confirms it or 5 s pass.
   component Pending: QtObject {
     id: pending
@@ -40,16 +44,16 @@ Panel {
   property bool dataBusy: false
   property string dataFeedback: ""
   property string dataBeforeId: ""
-  readonly property var dataAction: widget && widget.snapshot ? widget.snapshot.data_action || ({}) : ({})
+  readonly property var dataAction: snapshot.data_action || ({})
   // Only Focus's own export folder is ever handed to xdg-open.
   readonly property string exportFolder: {
     var path = String(dataAction.path || "")
     var folder = path.slice(0, path.lastIndexOf("/"))
     return /^\/[^\n]*\/focus-ratio\/exports$/.test(folder) && folder.indexOf("/../") < 0 ? folder : ""
   }
-  readonly property var weekly: widget && widget.snapshot ? widget.snapshot.weekly || ({}) : ({})
-  readonly property var suggestions: widget && widget.snapshot ? widget.snapshot.suggestions || [] : []
-  readonly property var subdomainRules: widget && widget.snapshot ? widget.snapshot.subdomain_rules || ({}) : ({})
+  readonly property var weekly: snapshot.weekly || ({})
+  readonly property var suggestions: snapshot.suggestions || []
+  readonly property var subdomainRules: snapshot.subdomain_rules || ({})
   property var pendingSubdomainRules: ({})
   onSubdomainRulesChanged: {
     var pending = Object.assign({}, pendingSubdomainRules)
@@ -110,7 +114,10 @@ Panel {
   property string detachingMember: ""
   property string detachFeedback: ""
   property Item activePicker: null
-  onOpenedChanged: if (!opened) excludedOpen = false
+  onOpenedChanged: {
+    if (opened) snapshot = liveSnapshot
+    else excludedOpen = false
+  }
 
   function matchesApp(searchText, category, id) {
     if (appFilter !== "all" && (pendingCategories[id] || category) !== appFilter) return false
@@ -134,7 +141,7 @@ Panel {
   }
   property string mergingSource: ""
   property string mergeFeedback: ""
-  readonly property var diagnostics: widget && widget.snapshot ? widget.snapshot.diagnostics || ({}) : ({})
+  readonly property var diagnostics: snapshot.diagnostics || ({})
   readonly property bool serviceConnected: widget ? widget.serviceConnected === true : false
 
   component ManageHeader: Omarchy.Button {
@@ -359,20 +366,19 @@ Panel {
     }
   }
 
-  readonly property var tracked: widget && widget.snapshot && widget.snapshot.tracked ? widget.snapshot.tracked : []
+  readonly property var tracked: snapshot.tracked || []
   readonly property int activeCount: tracked.filter(function(row) {
     return Number(row.visible_windows || 0) > 0
   }).length
-  readonly property var history: widget && widget.snapshot && widget.snapshot.history ? widget.snapshot.history : []
-  readonly property var today: widget && widget.snapshot && widget.snapshot.today ? widget.snapshot.today : ({})
+  readonly property var history: snapshot.history || []
+  readonly property var today: snapshot.today || ({})
   readonly property real productiveToday: Math.max(0, Number(today.productive || 0))
   readonly property real neutralToday: Math.max(0, Number(today.neutral || 0))
   readonly property real consumedToday: Math.max(0, Number(today.consumption || 0))
   readonly property real classifiedToday: productiveToday + neutralToday + consumedToday
   readonly property real productiveActivityShare: classifiedToday > 0 ? productiveToday / classifiedToday : 0
   readonly property real neutralActivityShare: classifiedToday > 0 ? neutralToday / classifiedToday : 0
-  readonly property var savedIgnoredTargets: widget && widget.snapshot && widget.snapshot.ignored_targets
-    ? widget.snapshot.ignored_targets : []
+  readonly property var savedIgnoredTargets: snapshot.ignored_targets || []
   property var pendingExcluded: []
   property var pendingUnexcluded: []
   readonly property var ignoredTargets: savedIgnoredTargets.filter(function(id) {
@@ -388,9 +394,8 @@ Panel {
   readonly property real maxTodaySeconds: Math.max(1, tracked.reduce(function(best, row) {
     return Math.max(best, Number(row.today_seconds || 0))
   }, 0))
-  readonly property bool working: !!(widget && widget.snapshot && widget.snapshot.working)
-  readonly property var savedSchedule: widget && widget.snapshot && widget.snapshot.schedule
-    ? widget.snapshot.schedule : ({ weekdays: [0, 1, 2, 3, 4], start: "08:00", end: "17:00" })
+  readonly property bool working: !!snapshot.working
+  readonly property var savedSchedule: snapshot.schedule || ({ weekdays: [0, 1, 2, 3, 4], start: "08:00", end: "17:00" })
   property string scheduleStartDraft: "08:00"
   property string scheduleEndDraft: "17:00"
   property bool scheduleTimeEdited: false
@@ -531,6 +536,7 @@ Panel {
     }
   }
   Component.onCompleted: {
+    if (opened) snapshot = liveSnapshot
     syncTracked()
     scheduleStartDraft = savedSchedule.start
     scheduleEndDraft = savedSchedule.end
@@ -1804,7 +1810,7 @@ Panel {
                     : root.page === "manage" ? "No saved apps or sites"
                     : root.working ? "No open apps or sites"
                     : root.paused ? "Tracking paused"
-                    : root.widget && root.widget.snapshot && root.widget.snapshot.idle ? "Paused while idle"
+                    : root.snapshot.idle ? "Paused while idle"
                     : "Outside tracking hours"
                   color: root.textColor
                   font.pixelSize: Style.font.body

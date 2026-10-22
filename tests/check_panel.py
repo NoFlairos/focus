@@ -328,6 +328,16 @@ Item {
  compare(focusPanel.exportFolder, "")
  widget.snapshot = previous
  }
+ function test_closed_panel_skips_updates() {
+ var previous = widget.snapshot
+ focusPanel.close()
+ widget.snapshot = Object.assign({}, previous, {working:false})
+ compare(focusPanel.snapshot, previous)
+ focusPanel.open()
+ compare(focusPanel.snapshot.working, false)
+ widget.snapshot = previous
+ compare(focusPanel.snapshot, previous)
+ }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")
  focusPanel.manageSection="apps"; wait(30)
