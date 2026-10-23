@@ -24,7 +24,7 @@ module('Quickshell',{'Quickshell':(True,'import QtQuick\nQtObject { function exe
 module('Quickshell.Io',{'FileView':(False,'''import QtQuick
 QtObject {property string path; property bool watchChanges; property bool printErrors; signal loaded(); signal fileChanged(); function reload() {} function text() {return "{}";} }'''),
 'Process':(False,'''import QtQuick
-QtObject {property var command: []; property bool running: false; signal exited(int exitCode)}''')})
+QtObject {property var command: []; property bool running: false; property bool stdinEnabled: false; property string written: ""; signal started(); signal exited(int exitCode); onRunningChanged: if (running) started(); function write(data) {written += data;} }''')})
 module('qs.Commons',{
 'Style':(True,'''import QtQuick
 QtObject { property var bar: ({iconFont: 13, iconSlot: 27}); property int cornerRadius: 6; property var spacing: ({hairline: 1}); property var font: ({family: "Sans", body: 14, bodySmall: 12, caption: 10, title: 18, heading: 20}); function controlFill(f,h,fg,a) {return "transparent";} function controlBorder(f,h,fg,a) {return "gray";} function space(n) {return n;} function spaceReal(n) {return n;} }'''),
@@ -337,6 +337,14 @@ Item {
  compare(focusPanel.snapshot.working, false)
  widget.snapshot = previous
  compare(focusPanel.snapshot, previous)
+ }
+ function test_commands_pass_ids_on_stdin() {
+ focusPanel.commandQueue=[]
+ focusPanel.runAgent(["classify", "site:private.example", "neutral"]); wait(30)
+ var process = findChild(focusPanel, "commandProcess")
+ compare(process.command, ["python3", "unused", "--stdin"])
+ compare(process.written, '["classify","site:private.example","neutral"]\n')
+ process.running = false; process.written = ""; process.exited(0)
  }
  function test_sections_and_groups() {
  compare(focusPanel.manageSection, "")

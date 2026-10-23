@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from typing import Any
+from typing import Any, Callable
 
 
 APP_NAME = "focus-ratio"
@@ -649,9 +649,75 @@ def site_root(domain: str) -> str:
     return registrable_domain(domain, 3)
 
 
+class Notifier:
+    """Desktop notifications over D-Bus. Unlike notify-send, nothing shown in a notification
+    ever appears in a process command line, which other users may read from /proc."""
+
+    SERVICE = "org.freedesktop.Notifications"
+    PATH = "/org/freedesktop/Notifications"
+    ACTION_SECONDS = 3600  # a click on an older limit notification no longer counts
+
+    def __init__(self, on_default: Callable[[str], None]) -> None:
+        self.on_default = on_default
+        self.waiting: dict[int, tuple[str, float]] = {}  # notification id -> (snooze target, sent at)
+        self.lock = threading.Lock()
+        self.bus = None
+        ready = threading.Event()
+        threading.Thread(target=self.listen, args=(ready,), daemon=True).start()
+        ready.wait(5)
+
+    def listen(self, ready: threading.Event) -> None:
+        # Signals are delivered to the context that subscribed, so this thread owns one.
+        try:
+            import gi
+            gi.require_version("Gio", "2.0")
+            from gi.repository import Gio, GLib
+            context = GLib.MainContext.new()
+            context.push_thread_default()
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            self.bus.signal_subscribe(self.SERVICE, self.SERVICE, "ActionInvoked", self.PATH, None,
+                                      Gio.DBusSignalFlags.NONE, self.on_action)
+        except Exception:
+            self.bus = None
+            return
+        finally:
+            ready.set()
+        GLib.MainLoop(context).run()
+
+    def on_action(self, connection, sender, path, interface, signal_name, parameters) -> None:
+        notification_id, action = parameters.unpack()
+        with self.lock:
+            target, sent_at = self.waiting.pop(notification_id, ("", 0.0))
+        if action == "default" and target and time.monotonic() - sent_at < self.ACTION_SECONDS:
+            self.on_default(target)
+
+    def send(self, title: str, body: str, snooze_target: str = "") -> None:
+        if self.bus is None:
+            return
+        from gi.repository import Gio, GLib
+        # Omarchy shows no action buttons; clicking a notification runs its "default"
+        # action. Critical is the only urgency it keeps on screen until the user acts.
+        actions = ["default", "5 more minutes"] if snooze_target else []
+        hints = {"urgency": GLib.Variant("y", 2)} if snooze_target else {}
+        try:
+            reply = self.bus.call_sync(
+                self.SERVICE, self.PATH, self.SERVICE, "Notify",
+                GLib.Variant("(susssasa{sv}i)", ("Focus", 0, "preferences-system-time", title, body, actions, hints, -1)),
+                GLib.VariantType("(u)"), Gio.DBusCallFlags.NONE, 2000, None)
+        except Exception:
+            return
+        if snooze_target:
+            now = time.monotonic()
+            with self.lock:
+                # Closed notifications send no action; their entries simply age out.
+                self.waiting = {key: entry for key, entry in self.waiting.items() if now - entry[1] < self.ACTION_SECONDS}
+                self.waiting[reply.unpack()[0]] = (snooze_target, now)
+
+
 class Runtime:
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        self.notifier: Notifier | None = None  # connects to the session bus on first use
         self.config = load_config()
         self.store = Store()
         # Pre-manual-group versions could fold a web app into its parent
@@ -749,30 +815,10 @@ class Runtime:
         """Desktop notification; a limit notification offers one 5-minute extension."""
         if snooze_target:
             body += " Click for 5 more minutes."
+        if self.notifier is None:
+            self.notifier = Notifier(lambda target: self.handle_message({"op": "snooze", "target_id": target}))
         # Bodies may be rendered as markup; names come from apps and sites.
-        command = ["notify-send", "-a", "Focus", "-i", "preferences-system-time", title, html.escape(body, quote=False)]
-        if snooze_target:
-            # Omarchy shows no action buttons; clicking a notification runs its "default"
-            # action. Critical is the only urgency it keeps on screen until the user acts.
-            command += ["-u", "critical", "-A", "default=5 more minutes"]
-        try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE if snooze_target else subprocess.DEVNULL,
-                                       stderr=subprocess.DEVNULL, text=True)
-        except OSError:
-            return
-        if not snooze_target:
-            return
-
-        def wait_for_action() -> None:
-            try:
-                choice, _ = process.communicate(timeout=3600)
-            except (OSError, ValueError, subprocess.TimeoutExpired):
-                process.kill()
-                return
-            if str(choice).strip() == "default":
-                self.handle_message({"op": "snooze", "target_id": snooze_target})
-
-        threading.Thread(target=wait_for_action, daemon=True).start()
+        self.notifier.send(title, html.escape(body, quote=False), snooze_target)
 
     def weekly_report(self, now: dt.datetime) -> None:
         """Once per ISO week, summarise the previous week if it has recorded screen time."""
@@ -1753,14 +1799,30 @@ def native_host() -> None:
         return
 
 
+OPERATIONS = ["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude",
+              "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history",
+              "subdomains", "snooze", "focus", "budget", "day-start", "limit-suggestion", "weekly-summary", "limit-period"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Focus local tracking service")
     parser.add_argument("--daemon", action="store_true", help="run the local tracker")
     parser.add_argument("--native-host", action="store_true", help="run the Chromium native messaging bridge")
-    parser.add_argument("operation", nargs="?", choices=["classify", "quota", "limit-action", "remove", "add-app", "pause", "schedule", "exclude", "unexclude", "merge", "unlink", "warning", "dismiss-suggestion", "export-history", "backup-settings", "clear-history", "subdomains", "snooze", "focus", "budget", "day-start", "limit-suggestion",
-                                                         "weekly-summary", "limit-period"])
+    parser.add_argument("--stdin", action="store_true",
+                        help="read the operation and its arguments as one JSON array line on stdin")
+    parser.add_argument("operation", nargs="?", choices=OPERATIONS)
     parser.add_argument("arguments", nargs="*")
     args = parser.parse_args()
+    if args.stdin:
+        # The panel passes app and site ids here: a command line is readable by other users in /proc.
+        try:
+            values = json.loads(sys.stdin.readline(65536))
+        except ValueError:
+            values = None
+        if not (isinstance(values, list) and values and all(isinstance(value, str) for value in values)
+                and values[0] in OPERATIONS):
+            parser.error("--stdin expects a JSON array: an operation followed by its arguments")
+        args.operation, args.arguments = values[0], values[1:]
     os.umask(0o077)  # history database, journals and anything else created stay owner-only
     ensure_dirs()
     if args.native_host:

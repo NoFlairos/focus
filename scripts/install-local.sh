@@ -8,6 +8,8 @@ config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/focus-ratio"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/focus-ratio"
 
 python3 -c 'import ctypes; ctypes.CDLL("libpsl.so.5")' || { printf 'Focus requires libpsl. Install the libpsl package first.\n' >&2; exit 1; }
+python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null \
+  || { printf 'Focus requires python-gobject for notifications. Install the python-gobject package first.\n' >&2; exit 1; }
 
 mkdir -p "$install_dir" "$install_dir/browser" "$install_dir/browser/icons" "$unit_dir"
 # Settings and history are private to the user, including on existing installs.

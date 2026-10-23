@@ -610,9 +610,14 @@ Panel {
   }
 
 
-  // One agent process at a time keeps rapid edits in click order.
+  // One agent process at a time keeps rapid edits in click order. Arguments go over
+  // stdin, never argv: app and site ids would otherwise be readable in /proc.
   Process {
     id: commandProcess
+    objectName: "commandProcess"
+    property var request: []
+    stdinEnabled: true
+    onStarted: write(JSON.stringify(request) + "\n")
     onExited: function(exitCode) {
       optimisticResetTimer.restart()
       root.dispatchCommand()
@@ -637,7 +642,8 @@ Panel {
     if (commandProcess.running || !commandQueue.length || !widget) return
     var next = commandQueue[0]
     commandQueue = commandQueue.slice(1)
-    commandProcess.command = ["python3", widget.agentPath].concat(next)
+    commandProcess.request = next
+    commandProcess.command = ["python3", widget.agentPath, "--stdin"]
     commandProcess.running = true
   }
 

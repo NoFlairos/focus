@@ -26,7 +26,7 @@ Everything stays on your computer.
 
 ## Install
 
-Requires Omarchy Linux, Python 3, libpsl and a systemd user session. The helper is required;
+Requires Omarchy Linux, Python 3, libpsl, python-gobject and a systemd user session. The helper is required;
 installing the widget alone does not start tracking.
 
 ```sh

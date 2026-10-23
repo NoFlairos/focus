@@ -1,6 +1,7 @@
 """Regression checks for Focus Ratio's local accounting and window matching."""
 
 import datetime as dt
+import io
 import os
 import importlib.util
 import pathlib
@@ -40,13 +41,13 @@ class AgentTests(unittest.TestCase):
         self.session = mock.patch.object(agent, "session_status", lambda: (False, False))
         self.schedule = mock.patch.object(agent, "in_work_hours", lambda now, schedule: True)
         self.hypr = mock.patch.object(agent, "hypr_json", return_value=[])
-        # Never show real desktop notifications from tests.
-        self.popen = mock.patch.object(agent.subprocess, "Popen")
-        for patcher in (self.visible, self.focus, self.session, self.schedule, self.hypr, self.popen):
+        for patcher in (self.visible, self.focus, self.session, self.schedule, self.hypr):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.runtime = agent.Runtime()
         self.addCleanup(lambda: self.runtime.store.close())
+        self.runtime.notifier = mock.Mock()
+        self.sent = self.runtime.notifier.send
         # Calendar days in tests; the late-night shift has its own test.
         self.runtime.config["day_start_hour"] = 0
         self.closed = []
@@ -237,16 +238,15 @@ class AgentTests(unittest.TestCase):
 
     def test_warning_once_and_can_be_disabled(self):
         self.runtime.handle_message({"op": "classify", "target_id": "app:test", "category": "consumption"})
-        with mock.patch.object(agent.subprocess, "Popen") as notify:
-            self.runtime.tick(481)
-            self.runtime.tick(1)
-            self.assertEqual(notify.call_count, 1)
-            self.assertIn("Limit approaching", notify.call_args.args[0][-2])
+        self.runtime.tick(481)
+        self.runtime.tick(1)
+        self.assertEqual(self.sent.call_count, 1)
+        self.assertIn("Limit approaching", self.sent.call_args.args[0])
         self.runtime.handle_message({"op": "set_warning", "enabled": False})
         self.runtime.warned_limits.clear()
-        with mock.patch.object(agent.subprocess, "Popen") as notify:
-            self.runtime.tick(1)
-            notify.assert_not_called()
+        self.sent.reset_mock()
+        self.runtime.tick(1)
+        self.sent.assert_not_called()
 
     def test_weekly_summary_keeps_missing_data_unknown(self):
         today = dt.date(2026, 9, 29)
@@ -333,16 +333,13 @@ class AgentTests(unittest.TestCase):
         target = "app:test"
         self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
         self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
-        process = mock.Mock()
-        process.communicate.return_value = ("default\n", "")
-        threads = []
-        with mock.patch.object(agent.subprocess, "Popen", return_value=process) as popen, \
-                mock.patch.object(agent.threading, "Thread", side_effect=lambda target, daemon: threads.append(target) or mock.Mock()):
+        self.runtime.notifier = None
+        with mock.patch.object(agent, "Notifier") as notifier:
             self.runtime.tick(61)
-        command = popen.call_args.args[0]
-        self.assertIn("Test closed. Click for 5 more minutes.", command)
-        self.assertEqual(command[-2:], ["-A", "default=5 more minutes"])
-        threads[-1]()
+        notifier.return_value.send.assert_called_once_with(
+            "Time limit reached · Test", "Test closed. Click for 5 more minutes.", target)
+        on_default = notifier.call_args.args[0]
+        on_default(target)
         self.assertEqual(self.runtime.config["snoozes"][target], agent.current_hour_bucket(dt.datetime.now().astimezone()))
 
     def test_limit_prompt_offers_snooze_briefly_after_closing(self):
@@ -350,8 +347,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
         self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
         self.runtime.tick(61)
-        command = agent.subprocess.Popen.call_args.args[0]
-        self.assertIn("critical", command)
+        self.assertEqual(self.sent.call_args.args[2], target)
         self.clients = []
         self.runtime.tick(0)
         self.assertEqual(self.runtime.latest_state["limit_prompts"], [{"id": target, "name": "Test"}])
@@ -1183,15 +1179,10 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "classify", "target_id": target, "category": "consumption"})
         self.runtime.handle_message({"op": "set_quota", "target_id": target, "quota_minutes": 1})
         self.runtime.handle_message({"op": "set_limit_action", "target_id": target, "action": "notify"})
-        with mock.patch.object(agent.subprocess, "Popen") as notify:
-            self.runtime.tick(61)
-            self.runtime.tick(1)
+        self.runtime.tick(61)
+        self.runtime.tick(1)
         self.assertEqual(self.closed, [])
-        notify.assert_called_once()
-        args = notify.call_args.args[0]
-        self.assertIn("Time limit reached · Test", args)
-        self.assertIn("Test stays open. Click for 5 more minutes.", args)
-        self.assertEqual(args[-2:], ["-A", "default=5 more minutes"])
+        self.sent.assert_called_once_with("Time limit reached · Test", "Test stays open. Click for 5 more minutes.", target)
 
     def test_reclassification_keeps_quota_edit(self):
         target = "app:test"
@@ -1256,9 +1247,31 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(ORIGINAL_VISIBLE_CLIENTS()[0]["app_id"], "x" * 120)
 
     def test_notification_body_is_escaped(self):
-        with mock.patch.object(agent.subprocess, "Popen") as popen:
-            self.runtime.notify("Limit", '<img src="http://x/a.png"> & more')
-        self.assertEqual(popen.call_args[0][0][-1], '&lt;img src="http://x/a.png"&gt; &amp; more')
+        self.runtime.notify("Limit", '<img src="http://x/a.png"> & more')
+        self.assertEqual(self.sent.call_args.args[1], '&lt;img src="http://x/a.png"&gt; &amp; more')
+
+    def test_notifier_uses_dbus_and_honours_recent_clicks(self):
+        self.assertNotIn('"notify-send"', pathlib.Path(agent.__file__).read_text())
+        clicked = []
+        notifier = agent.Notifier.__new__(agent.Notifier)
+        notifier.on_default, notifier.waiting, notifier.lock = clicked.append, {}, agent.threading.Lock()
+        notifier.bus = mock.Mock()
+        notifier.bus.call_sync.return_value.unpack.return_value = (7,)
+        notifier.send("Time limit reached · Test", "Test closed.", "app:test")
+        call = notifier.bus.call_sync.call_args.args
+        self.assertEqual(call[3], "Notify")
+        self.assertEqual(call[4].unpack(), ("Focus", 0, "preferences-system-time", "Time limit reached · Test",
+                                            "Test closed.", ["default", "5 more minutes"], {"urgency": 2}, -1))
+        signal = lambda id_, action: mock.Mock(unpack=mock.Mock(return_value=(id_, action)))
+        notifier.on_action(None, None, None, None, "ActionInvoked", signal(8, "default"))
+        self.assertEqual(clicked, [])
+        notifier.on_action(None, None, None, None, "ActionInvoked", signal(7, "default"))
+        self.assertEqual(clicked, ["app:test"])
+        notifier.on_action(None, None, None, None, "ActionInvoked", signal(7, "default"))
+        self.assertEqual(clicked, ["app:test"])
+        notifier.waiting[9] = ("app:old", time.monotonic() - agent.Notifier.ACTION_SECONDS)
+        notifier.on_action(None, None, None, None, "ActionInvoked", signal(9, "default"))
+        self.assertEqual(clicked, ["app:test"])
 
     def test_private_files_never_exist_with_open_modes(self):
         previous = os.umask(0o022)
@@ -1284,6 +1297,26 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(agent.CONFIG_PATH.stat().st_mode & 0o777, 0o600)
         response = self.runtime.handle_message({"op": "export_history"})
         self.assertEqual(pathlib.Path(response["path"]).stat().st_mode & 0o777, 0o600)
+
+    def test_cli_reads_ids_from_stdin(self):
+        previous = os.umask(0o077)
+        self.addCleanup(os.umask, previous)
+        request = '["classify", "site:private.example", "neutral"]\n'
+        with mock.patch.object(agent, "request_agent", return_value={"ok": True}) as send, \
+                mock.patch.object(agent.sys, "argv", ["focus_ratio_agent.py", "--stdin"]), \
+                mock.patch.object(agent.sys, "stdin", io.StringIO(request)), \
+                mock.patch.object(agent.sys, "stdout", io.StringIO()):
+            agent.main()
+        send.assert_called_once_with({"op": "classify", "target_id": "site:private.example", "category": "neutral"})
+        for bad in ('{"op": "classify"}\n', '["format-disk"]\n', 'not json\n', '[]\n'):
+            with mock.patch.object(agent, "request_agent") as send, \
+                    mock.patch.object(agent.sys, "argv", ["focus_ratio_agent.py", "--stdin"]), \
+                    mock.patch.object(agent.sys, "stdin", io.StringIO(bad)), \
+                    mock.patch.object(agent.sys, "stderr", io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                agent.main()
+            send.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

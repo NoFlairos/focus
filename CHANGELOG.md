@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 — 2026-10-23
+
+- App and site names never appear in a process command line, which other users
+  can read: notifications are sent over D-Bus instead of `notify-send` (clicking
+  still grants 5 more minutes), and the panel passes commands to the helper on stdin.
+
 ## 0.8.9 — 2026-10-22
 
 - **About 3× lighter:** a closed panel no longer rebuilds its lists on every
