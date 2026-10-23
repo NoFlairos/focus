@@ -46,7 +46,7 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 
 ## Files and links
 
-- ZIP: `dist/focus-chrome-0.5.0.zip`
+- ZIP: `dist/focus-chrome-0.5.1.zip`
 - Icon: `extensions/chromium/icons/128.png`
 - Promo: `release/assets/promo-440x280.png`
 - Screenshot: 1280×800 composition of `release/assets/panel-now.png` and `panel-history.png`
@@ -54,7 +54,7 @@ sharing. Confirm dashboard declarations against its definitions before submissio
 - Support: https://github.com/NoFlairos/focus/issues
 - Privacy: https://noflairos.github.io/focus/privacy.html
 
-Published: 0.5.0 (2026-10-14). Next update: upload the new ZIP from `dist/`, refresh
+Published: 0.5.1 (2026-10-23). Next update: upload the new ZIP from `dist/`, refresh
 the description and screenshot if features changed. [Reviewer instructions](REVIEWER.md).
 
 References checked 2026-09-29: [images](https://developer.chrome.com/docs/webstore/images),

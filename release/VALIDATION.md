@@ -17,4 +17,4 @@ Used daily on Omarchy since 0.4: panel, bar mark and scrolling were checked on a
 (bubblewrap, temporary profiles and XDG folders, no personal desktop or session bus).
 
 **Not yet covered:** a fresh Omarchy installation from the catalog. The Chrome Web
-Store now serves extension 0.5.0, the build tested above.
+Store now serves extension 0.5.1, the build tested above.

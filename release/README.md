@@ -4,7 +4,7 @@
 | --- | --- |
 | [GitHub](https://github.com/NoFlairos/focus) | Source and releases; this repository is the plugin source. |
 | [Omarchy plugin catalog](https://omarchyplugins.com/plugin.html?id=io.github.noflairos.focus-ratio) | Listed; updates go through a *Verify* issue for the new commit. |
-| [Chrome Web Store](https://chromewebstore.google.com/detail/dmeieacelhalokmjoijllpieglfjojjo) | Published, 0.5.0 (current extension build). |
+| [Chrome Web Store](https://chromewebstore.google.com/detail/dmeieacelhalokmjoijllpieglfjojjo) | Published, 0.5.1 (current extension build). |
 
 | File | Purpose |
 | --- | --- |
