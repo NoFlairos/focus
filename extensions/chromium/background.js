@@ -5,11 +5,16 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   let domain;
   try { domain = new URL(sender.url).hostname; } catch (_) { return; }
   if (domain !== message.domain) return;
-  siteMetadata.set(sender.tab.id, {domain, name: String(message.name || "").slice(0, 120), identity: message.identity || {}});
-  sendSnapshot();
+  const identity = message.identity && typeof message.identity === "object" ? {
+    application_name: String(message.identity.application_name || "").slice(0, 120),
+    manifest: String(message.identity.manifest || "").slice(0, 2048),
+  } : null;
+  // Sent with the next one-second snapshot: a page cannot trigger extra messages.
+  siteMetadata.set(sender.tab.id, {domain, name: String(message.name || "").slice(0, 120), identity});
 });
 chrome.tabs.onRemoved.addListener(id => siteMetadata.delete(id));
 const HOST_NAME = "io.github.noflairos.focus_ratio";
+const MAX_ENTRIES = 50;  // windows and declared identities per snapshot
 let port = null;
 let retryTimer = null;
 
@@ -56,16 +61,17 @@ async function sendSnapshot() {
           id: win.id,
           tab_id: tab.id,
           state: win.state || "normal",
-          title: tab.title || win.title || "",
+          title: (tab.title || win.title || "").slice(0, 512),
           ...site,
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .slice(0, MAX_ENTRIES);
     const metadata = new Map();
     for (const win of windows) {
       for (const tab of win.tabs || []) {
         const site = tabSite(tab);
-        if (site?.site_identity) metadata.set(site.domain, site);
+        if (site?.site_identity && metadata.size < MAX_ENTRIES) metadata.set(site.domain, site);
       }
     }
     // Background tabs provide service identity only, never activity or close targets.

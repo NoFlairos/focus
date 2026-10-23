@@ -45,3 +45,12 @@ class HostInstallTests(unittest.TestCase):
                 self.assertEqual(manifest["path"], str(helper.parent / "native-host.sh"))
                 self.assertEqual(manifest["allowed_origins"], sorted([f"chrome-extension://{EXTENSION_ID}/", f"chrome-extension://{STORE_ID}/"]))
                 self.assertTrue(os.access(manifest["path"], os.X_OK))
+            wrapper = (helper.parent / "native-host.sh").read_text()
+            self.assertIn("export XDG_CONFIG_HOME=" + str(config), wrapper)
+            self.assertIn("exec ", wrapper)
+            broken = config / "chromium/NativeMessagingHosts/io.github.noflairos.focus_ratio.json"
+            broken.write_text("{not json")
+            result = register()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(broken.read_text())["allowed_origins"],
+                             sorted([f"chrome-extension://{EXTENSION_ID}/", f"chrome-extension://{STORE_ID}/"]))

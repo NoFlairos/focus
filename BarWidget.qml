@@ -11,11 +11,17 @@ BarWidget {
   readonly property var panelItem: panelLoader.item
   readonly property bool opened: panelItem ? panelItem.opened === true : false
   readonly property bool popoutSwitchClosing: panelItem ? panelItem.popoutSwitchClosing === true : false
-  readonly property string dataHome: Quickshell.env("XDG_DATA_HOME") || (Quickshell.env("HOME") + "/.local/share")
-  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || (Quickshell.env("HOME") + "/.local/state")
+  // Same rules as the agent: empty or relative XDG values are ignored.
+  function xdgDir(name, fallback) {
+    var value = String(Quickshell.env(name) || "")
+    return value.charAt(0) === "/" ? value : fallback
+  }
+  readonly property string dataHome: xdgDir("XDG_DATA_HOME", Quickshell.env("HOME") + "/.local/share")
+  readonly property string stateHome: xdgDir("XDG_STATE_HOME", Quickshell.env("HOME") + "/.local/state")
   readonly property string agentPath: dataHome + "/focus-ratio/focus_ratio_agent.py"
-  readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || "/run/user/1000"
-  readonly property string statePath: runtimeDir + "/focus-ratio/state.json"
+  // No guessed fallback: another user's runtime folder is never a path to watch.
+  readonly property string runtimeDir: xdgDir("XDG_RUNTIME_DIR", "")
+  readonly property string statePath: runtimeDir ? runtimeDir + "/focus-ratio/state.json" : ""
   property var snapshot: ({ tracked: [], today: ({}), history: [] })
   property string snapshotText: ""
   property double statusNow: Date.now()
@@ -39,6 +45,8 @@ BarWidget {
   readonly property var visibleTargets: (snapshot.tracked || []).filter(function(target) {
     return Number(target.visible_windows || 0) > 0
   })
+  // The bar shows a few chips and a short tooltip, however many entries are visible.
+  readonly property var chipTargets: visibleTargets.slice(0, 8)
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -121,6 +129,7 @@ BarWidget {
 
   WidgetButton {
     id: button
+    objectName: "focusButton"
     anchors.fill: parent
     bar: root.bar
     text: " "
@@ -141,10 +150,11 @@ BarWidget {
       : root.focusUntil > root.statusNow ? "Focus session · until " + Qt.formatTime(new Date(root.focusUntil), "HH:mm")
       : root.trackingPaused ? "Focus · tracking paused"
       + (root.snapshot.idle && !root.snapshot.paused ? " while idle" : "")
-      : root.visibleTargets.length ? root.visibleTargets.map(function(target) {
+      : root.visibleTargets.length ? root.visibleTargets.slice(0, 5).map(function(target) {
       return root.appLabel(target) + (target.category === "consumption"
         ? " · " + root.remainingLabel(target.remaining_seconds) + " left" : "")
-    }).join("\n") : "Focus · no visible tracked app"
+    }).join("\n") + (root.visibleTargets.length > 5 ? "\n+ " + (root.visibleTargets.length - 5) + " more" : "")
+      : "Focus · no visible tracked app"
     onPressed: function(buttonCode) {
       if (buttonCode !== Qt.LeftButton) return
       if (root.connectionIssue && !root.opened) root.showDiagnostics()
@@ -236,10 +246,10 @@ BarWidget {
 
         Repeater {
           // Count model keeps chips alive across refreshes; data follows by index.
-          model: root.visibleTargets.length
+          model: root.chipTargets.length
           delegate: Rectangle {
             required property int index
-            readonly property var modelData: root.visibleTargets[index] || ({})
+            readonly property var modelData: root.chipTargets[index] || ({})
             readonly property bool focused: modelData.id === root.snapshot.focused_id
             implicitWidth: targetRow.implicitWidth + Style.space(10)
             height: Style.space(25)

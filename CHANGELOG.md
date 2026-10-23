@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.1 — 2026-10-23 · extension 0.5.1
+
+- **Site names stay minimal:** names and identities are kept only for sites on screen
+  while tracking, or already in Focus. Background tabs and paused browsing leave nothing.
+  Automatic subdomain groups are limited to the 500 most recent; manual merges stay.
+- **Bounded everywhere:** the extension caps what a page can report and sends it only
+  with the one-second snapshot; the bridge answers bad messages instead of stopping;
+  the bar shows at most 8 chips, the panel 300 entries, the agent 60 visible entries.
+- **Sturdier helper:** one instance at a time, socket timeouts, damaged settings
+  repaired key by key, and a failing tick no longer stops tracking.
+- **Installer:** empty or relative XDG folders are ignored, unsafe folder names are
+  refused for the systemd unit, and the service and bridge use the same folders.
+- *Open export folder* only opens the exact export folder.
+
 ## 0.9.0 — 2026-10-23
 
 - App and site names never appear in a process command line, which other users

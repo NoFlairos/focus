@@ -11,6 +11,7 @@ import argparse
 import configparser
 import csv
 import ctypes
+import fcntl
 import datetime as dt
 import functools
 import html
@@ -49,6 +50,10 @@ POLL_SECONDS = 1.0
 REVIEW_MIN_SECONDS = 600
 REVIEW_DAYS = 7
 STATE_HEARTBEAT_SECONDS = 10
+BROWSER_ENTRIES_MAX = 50  # windows and site declarations accepted per browser snapshot
+SITE_METADATA_MAX = 2000  # remembered site names and identities, pruned daily to known entries
+VISIBLE_ENTRIES_MAX = 60  # distinct apps and sites tracked at the same moment
+AUTO_LINKS_MAX = 500  # subdomain links made automatically; manual merges are not counted
 DB_COMMIT_SECONDS = 30  # usage seconds are batched; a crash loses at most this much tracking
 BROWSER_APP_IDS = {"chromium", "chromium-bin", "google-chrome", "google-chrome-stable", "chrome"}
 
@@ -57,7 +62,7 @@ BROWSER_APP_IDS = {"chromium", "chromium-bin", "google-chrome", "google-chrome-s
 def desktop_app_names(_refresh_period: int = 0) -> dict[str, str]:
     """Use installed desktop entries to turn window classes into application names."""
     names: dict[str, str] = {}
-    roots = [pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share"))]
+    roots = [xdg_dir("XDG_DATA_HOME", pathlib.Path.home() / ".local/share")]
     roots.extend(pathlib.Path(path) for path in os.environ.get(
         "XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if path)
     for root in roots:
@@ -73,7 +78,7 @@ def desktop_app_names(_refresh_period: int = 0) -> dict[str, str]:
                     continue
                 for key in (file.stem, info.get("StartupWMClass", "")):
                     if key:
-                        names.setdefault(key.casefold(), info["Name"])
+                        names.setdefault(key.casefold(), " ".join(info["Name"].split())[:120])
             except (OSError, UnicodeError, configparser.Error, KeyError):
                 continue
     return names
@@ -111,19 +116,29 @@ def cached_display_name(target_id: str, saved_name: str, desktop_period: int) ->
     return " ".join(part.capitalize() for part in parts) or raw_id
 
 
+def xdg_dir(name: str, default: str | pathlib.Path) -> pathlib.Path:
+    """XDG base directory. Empty or relative values are ignored, as the specification requires."""
+    value = os.environ.get(name, "")
+    return pathlib.Path(value) if os.path.isabs(value) else pathlib.Path(default)
+
+
 def config_home() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config"))
+    return xdg_dir("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")
 
 
 def state_home() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("XDG_STATE_HOME", pathlib.Path.home() / ".local/state"))
+    return xdg_dir("XDG_STATE_HOME", pathlib.Path.home() / ".local/state")
+
+
+def runtime_home() -> pathlib.Path:
+    return xdg_dir("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
 
 
 CONFIG_DIR = config_home() / APP_NAME
 STATE_DIR = state_home() / APP_NAME
 CONFIG_PATH = CONFIG_DIR / "config.json"
 # Rewritten every second for the bar widget: keep it in RAM (tmpfs), not on the SSD.
-STATE_PATH = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / APP_NAME / "state.json"
+STATE_PATH = runtime_home() / APP_NAME / "state.json"
 DB_PATH = STATE_DIR / "history.sqlite3"
 SOCKET_PATH = STATE_DIR / "control.sock"
 
@@ -139,6 +154,7 @@ def default_config() -> dict[str, Any]:
         "service_links": {},
         "site_names": {},
         "site_identity": {},
+        "auto_links": [],  # subdomain links Focus made itself, oldest first; see remember_auto_link
         "subdomain_rules": {},
         "subdomain_destinations": {},
         "subdomain_rule_schema": 2,
@@ -175,6 +191,31 @@ def create_private(path: pathlib.Path):
                      "w", encoding="utf-8", newline="")
 
 
+def sanitize_config(value: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+    """Replace hand-edited or corrupted settings with defaults, key by key, so a bad value
+    can never stop the service in a restart loop."""
+    for key, default in defaults.items():
+        if type(value[key]) is not type(default):
+            value[key] = default
+    try:
+        value["schedule"] = valid_schedule(value["schedule"])
+    except ValueError:
+        value["schedule"] = defaults["schedule"]
+    for key, low, high in (("day_start_hour", 0, MAX_DAY_START_HOUR),
+                           ("daily_budget_minutes", 0, MAX_DAILY_BUDGET_MINUTES),
+                           ("default_quota_minutes", 1, max(LIMIT_PERIODS.values()))):
+        if not low <= value[key] <= high:
+            value[key] = defaults[key]
+    value["targets"] = {key: target for key, target in value["targets"].items()
+                        if isinstance(key, str) and isinstance(target, dict)}
+    for key in ("service_links", "site_names", "subdomain_rules", "subdomain_destinations"):
+        value[key] = {name: item for name, item in value[key].items() if isinstance(item, str)}
+    value["site_identity"] = {name: item for name, item in value["site_identity"].items() if isinstance(item, dict)}
+    for key in ("review_targets", "ignored_targets", "independent_targets", "dismissed_suggestions", "auto_links"):
+        value[key] = [item for item in value[key] if isinstance(item, str)]
+    return value
+
+
 def load_config() -> dict[str, Any]:
     ensure_dirs()
     try:
@@ -189,7 +230,7 @@ def load_config() -> dict[str, Any]:
             value.setdefault(key, default)
         for retired in ("hide_excluded", "hidden_excluded_targets"):
             value.pop(retired, None)
-        return value
+        return sanitize_config(value, defaults)
     except FileNotFoundError:
         value = default_config()
         save_config(value)
@@ -219,7 +260,7 @@ def save_config(value: dict[str, Any]) -> None:
 
 
 def hypr_socket() -> pathlib.Path | None:
-    runtime_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "hypr"
+    runtime_dir = runtime_home() / "hypr"
     signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     if signature and (runtime_dir / signature / ".socket.sock").exists():
         return runtime_dir / signature / ".socket.sock"
@@ -370,6 +411,12 @@ def format_duration(seconds: float) -> str:
     return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
 
 
+def browser_domain(value: Any) -> str:
+    """A hostname reported by the browser, or "" when it is not a plausible one."""
+    domain = canonical_domain(str(value or ""))
+    return domain if len(domain) <= 253 and re.fullmatch(r"[a-z0-9.\-\[\]:]+", domain) else ""
+
+
 def canonical_domain(domain: str) -> str:
     value = domain.lower().strip().rstrip(".")
     for prefix in ("www.", "m."):
@@ -388,7 +435,7 @@ def web_app_domain(app_id: str) -> str:
 def desktop_app_domains(_refresh_period: int = 0) -> dict[str, str]:
     """Find explicit web-app URLs in desktop launchers, keyed by window class."""
     domains: dict[str, str] = {}
-    roots = [pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share"))]
+    roots = [xdg_dir("XDG_DATA_HOME", pathlib.Path.home() / ".local/share")]
     roots.extend(pathlib.Path(path) for path in os.environ.get(
         "XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if path)
     for root in roots:
@@ -717,6 +764,8 @@ class Notifier:
 class Runtime:
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        self.last_tick_error, self.last_tick_error_at = "", 0.0
+        self.tracking = False  # set by each tick: in schedule, unlocked, not idle or paused
         self.notifier: Notifier | None = None  # connects to the session bus on first use
         self.config = load_config()
         self.store = Store()
@@ -1000,10 +1049,30 @@ class Runtime:
             for alias in members:
                 self.config["service_links"][alias] = destination
             self.config["service_links"][site] = destination
+            self.remember_auto_link(site)
             self.config["review_targets"] = [value for value in self.config["review_targets"] if value != site]
             changed = True
         if changed:
             save_config(self.config)
+
+    def remember_auto_link(self, site: str) -> None:
+        """Track links Focus made itself and keep at most AUTO_LINKS_MAX: the oldest is dropped,
+        and made again if that subdomain is visited later. Manual merges are never dropped."""
+        links, auto_links = self.config["service_links"], self.config["auto_links"]
+        auto_links[:] = [value for value in auto_links if value in links and value != site] + [site]
+        while len(auto_links) > AUTO_LINKS_MAX:
+            oldest = auto_links.pop(0)
+            destination = links.pop(oldest)
+            for alias, target in list(links.items()):
+                if target == oldest:
+                    links[alias] = destination
+
+    def known_site_domains(self) -> set[str]:
+        """Sites with settings, links, history or an exclusion: the only ones worth naming."""
+        config = self.config
+        known = (set(config["targets"]) | set(config["service_links"]) | set(config["service_links"].values())
+                 | self.store.target_ids() | set(config["ignored_targets"]) | set(config["review_targets"]))
+        return {key[5:] for key in known if key.startswith("site:")}
 
     def prune_config(self) -> None:
         """Forget metadata and exceptions for entries with no settings, links or history left."""
@@ -1074,6 +1143,8 @@ class Runtime:
         with self.lock:
             if op == "browser_snapshot":
                 windows = message.get("windows", [])
+                windows = [window for window in windows[:BROWSER_ENTRIES_MAX] if isinstance(window, dict)
+                           and browser_domain(window.get("domain"))] if isinstance(windows, list) else []
                 browser_id = str(message.get("browser_id", "default"))[:100]
                 snapshot_time = time.monotonic()
                 self.browser_sessions[browser_id] = (snapshot_time, windows)
@@ -1086,13 +1157,19 @@ class Runtime:
                     if isinstance(window, dict) and window.get("id") is not None and window.get("state") != "minimized"
                 }
                 metadata = message.get("site_metadata", [])
-                if not isinstance(metadata, list):
-                    metadata = []
+                metadata = metadata[:BROWSER_ENTRIES_MAX] if isinstance(metadata, list) and self.tracking else []
+                # Names and identities are kept only while tracking, and only for sites on screen or
+                # already in Focus: background tabs and paused browsing leave nothing on disk.
+                visible_domains = {browser_domain(window.get("domain")) for window in self.browser_windows.values()}
+                remembered = visible_domains | self.known_site_domains() if metadata or self.tracking else set()
                 names_changed = False
-                for window in metadata + list(self.browser_windows.values()):
+                for window in (metadata + list(self.browser_windows.values())) if self.tracking else []:
                     if not isinstance(window, dict):
                         continue
-                    domain = canonical_domain(str(window.get("domain", "")))
+                    domain = browser_domain(window.get("domain"))
+                    if domain not in remembered or (domain not in self.config["site_identity"]
+                                                    and len(self.config["site_identity"]) >= SITE_METADATA_MAX):
+                        continue
                     name = clean_site_name(str(window.get("site_name", "")))[:120]
                     if domain and name and self.config["site_names"].get(domain) != name:
                         self.config["site_names"][domain] = name
@@ -1117,8 +1194,8 @@ class Runtime:
                             names_changed = True
                 if names_changed:
                     save_config(self.config)
-                self.link_sites({canonical_domain(str(window.get("domain", "")))
-                                     for window in self.browser_windows.values() if window.get("domain")})
+                if self.tracking:
+                    self.link_sites(visible_domains - {""})
                 self.last_browser_snapshot = time.monotonic()
                 blocked = self.blocked_domains()
                 clients = visible_clients() if blocked else []
@@ -1172,6 +1249,7 @@ class Runtime:
                     if self.resolve_target_id(alias) == source:
                         self.config["service_links"][alias] = destination
                 self.config["service_links"][source] = destination
+                self.config["auto_links"] = [value for value in self.config["auto_links"] if value != source]
                 self.config["review_targets"] = [value for value in self.config["review_targets"] if value != source]
                 self.config["link_schema"] = 2
                 self.config["ignored_targets"] = [value for value in self.config["ignored_targets"]
@@ -1509,6 +1587,7 @@ class Runtime:
             browser_connection_expected = (browser_running and self.browser_opened_at is not None
                                            and time.monotonic() - self.browser_opened_at >= 8)
             in_schedule = in_schedule and not self.paused
+            self.tracking = in_schedule
             if not in_schedule:
                 visible = []
                 site_clients = []
@@ -1540,6 +1619,9 @@ class Runtime:
                 else:
                     target_id = self.resolve_target_id(client["target_id"])
                 if target_id in ignored_targets:
+                    continue
+                # A client opening endless windows with new ids cannot grow the state the shell parses.
+                if target_id not in seen and len(seen) >= VISIBLE_ENTRIES_MAX:
                     continue
                 seen.setdefault(target_id, []).append(client)
 
@@ -1698,6 +1780,13 @@ class Runtime:
             self.close_app_windows(windows_to_close)
 
     def run(self) -> None:
+        # One daemon per user: a second one would take over the socket and overwrite settings.
+        self.instance_lock = os.open(STATE_DIR / "daemon.lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(self.instance_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("Focus is already running.", file=sys.stderr)
+            raise SystemExit(1)
         server = ControlServer(str(SOCKET_PATH), self)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -1711,7 +1800,13 @@ class Runtime:
                 start = time.monotonic()
                 delta = min(2.0, max(0.0, start - last))
                 last = start
-                self.tick(delta)
+                try:
+                    self.tick(delta)
+                except Exception as error:  # one bad tick must not stop tracking
+                    report = type(error).__name__
+                    if report != self.last_tick_error or time.monotonic() - self.last_tick_error_at > 3600:
+                        print(f"Focus tick failed: {report}", file=sys.stderr, flush=True)
+                        self.last_tick_error, self.last_tick_error_at = report, time.monotonic()
                 focus_event.wait(max(0.1, POLL_SECONDS - (time.monotonic() - start)))
                 focus_event.clear()
         finally:
@@ -1721,7 +1816,7 @@ class Runtime:
             server.server_close()
 
     def watch_focus(self, wakeup: threading.Event) -> None:
-        runtime_dir = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+        runtime_dir = runtime_home()
         while True:
             sockets = list((runtime_dir / "hypr").glob("*/.socket2.sock"))
             if not sockets:
@@ -1739,14 +1834,20 @@ class Runtime:
 
 
 class ControlHandler(socketserver.StreamRequestHandler):
+    timeout = 5  # a client that never finishes its line must not hold a thread
+
     def handle(self) -> None:
         try:
-            line = self.rfile.readline(1024 * 1024)
-            message = json.loads(line.decode("utf-8"))
+            message = json.loads(self.rfile.readline(1024 * 1024).decode("utf-8"))
+            if not isinstance(message, dict):
+                raise ValueError("request must be a JSON object")
             response = self.server.runtime.handle_message(message)  # type: ignore[attr-defined]
+        except Exception:
+            response = {"ok": False, "error": "invalid request"}
+        try:
             self.wfile.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
-        except (json.JSONDecodeError, OSError, ValueError) as error:
-            self.wfile.write((json.dumps({"ok": False, "error": str(error)}) + "\n").encode("utf-8"))
+        except OSError:
+            pass
 
 
 class ControlServer(socketserver.ThreadingUnixStreamServer):
@@ -1773,7 +1874,16 @@ def request_agent(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def native_host() -> None:
-    """Chrome native-messaging bridge. One framed JSON request in, one out."""
+    """Chrome native-messaging bridge. One framed JSON request in, one out.
+
+    A bad frame gets an error reply and the bridge keeps running, so no page can
+    knock tracking offline by making the extension send something unexpected.
+    """
+    def reply(response: dict[str, Any]) -> None:
+        encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
+        sys.stdout.buffer.write(struct.pack("<I", len(encoded)) + encoded)
+        sys.stdout.buffer.flush()
+
     try:
         while True:
             header = sys.stdin.buffer.read(4)
@@ -1781,21 +1891,29 @@ def native_host() -> None:
                 return
             length = struct.unpack("<I", header)[0]
             if length > 1024 * 1024:
-                return
+                while length:  # skip the oversized frame without holding it in memory
+                    chunk = sys.stdin.buffer.read(min(length, 65536))
+                    if not chunk:
+                        return
+                    length -= len(chunk)
+                reply({"ok": False, "error": "message too large"})
+                continue
             payload = sys.stdin.buffer.read(length)
             if len(payload) != length:
                 return
-            request = json.loads(payload.decode("utf-8"))
+            try:
+                request = json.loads(payload.decode("utf-8"))
+                if not isinstance(request, dict):
+                    raise ValueError("request must be a JSON object")
+            except (ValueError, RecursionError):
+                reply({"ok": False, "error": "invalid message"})
+                continue
             response = request_agent({"op": "get_state"} if request.get("op") == "status" else
                                      {"op": "browser_snapshot", "windows": request.get("windows", []),
                                       "browser_id": request.get("browser_id", "default"),
                                       "site_metadata": request.get("site_metadata", [])})
-            if request.get("op") == "status":
-                response = {"ok": bool(response.get("ok"))}
-            encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
-            sys.stdout.buffer.write(struct.pack("<I", len(encoded)) + encoded)
-            sys.stdout.buffer.flush()
-    except (OSError, json.JSONDecodeError, KeyError):
+            reply({"ok": bool(response.get("ok"))} if request.get("op") == "status" else response)
+    except (OSError, ValueError):
         return
 
 

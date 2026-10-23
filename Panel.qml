@@ -49,7 +49,7 @@ Panel {
   readonly property string exportFolder: {
     var path = String(dataAction.path || "")
     var folder = path.slice(0, path.lastIndexOf("/"))
-    return /^\/[^\n]*\/focus-ratio\/exports$/.test(folder) && folder.indexOf("/../") < 0 ? folder : ""
+    return widget && widget.stateHome && folder === widget.stateHome + "/focus-ratio/exports" ? folder : ""
   }
   readonly property var weekly: snapshot.weekly || ({})
   readonly property var suggestions: snapshot.suggestions || []
@@ -116,7 +116,10 @@ Panel {
   property Item activePicker: null
   onOpenedChanged: {
     if (opened) snapshot = liveSnapshot
-    else excludedOpen = false
+    else {
+      excludedOpen = false
+      finishEditing()
+    }
   }
 
   function matchesApp(searchText, category, id) {
@@ -286,7 +289,7 @@ Panel {
       height: Style.font.body + Style.space(2)
       color: root.textColor
       SequentialAnimation on opacity {
-        running: searchBox.activeFocus
+        running: searchBox.activeFocus && root.opened
         loops: Animation.Infinite
         NumberAnimation { to: 0; duration: 0 }
         PauseAnimation { duration: 530 }
@@ -453,14 +456,16 @@ Panel {
   }
 
   function syncTracked() {
-    var incoming = root.tracked
+    // Every row is a full card: a ceiling keeps the shared shell bounded whatever the agent sends.
+    var incoming = root.tracked.slice(0, 300)
     var wanted = {}
     for (var i = 0; i < incoming.length; i++) {
       var row = incoming[i]
       wanted[row.id] = true
       var flat = modelRow(row)
-      var found = -1
-      for (var j = 0; j < trackedModel.count; j++) {
+      // Rows usually keep their order, so the match is almost always at i.
+      var found = i < trackedModel.count && trackedModel.get(i).targetId === row.id ? i : -1
+      for (var j = i + 1; found < 0 && j < trackedModel.count; j++) {
         if (trackedModel.get(j).targetId === row.id) {
           found = j
           break
@@ -542,7 +547,7 @@ Panel {
     scheduleEndDraft = savedSchedule.end
   }
 
-  ListModel { id: trackedModel }
+  ListModel { id: trackedModel; objectName: "trackedModel" }
 
   // Scrolling: momentum after touchpad gestures; data refreshes wait until the list rests.
   property real wheelVelocity: 0

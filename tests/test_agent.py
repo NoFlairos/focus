@@ -48,6 +48,7 @@ class AgentTests(unittest.TestCase):
         self.addCleanup(lambda: self.runtime.store.close())
         self.runtime.notifier = mock.Mock()
         self.sent = self.runtime.notifier.send
+        self.runtime.tracking = True  # as after the first tick within the schedule
         # Calendar days in tests; the late-night shift has its own test.
         self.runtime.config["day_start_hour"] = 0
         self.closed = []
@@ -794,22 +795,58 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.store.history()[-1]["productive"], 0.5)
         self.assertNotIn(pending, self.runtime.store.pending_targets())
 
-    def test_background_metadata_groups_sites_without_tracking_background_tabs(self):
+    def test_background_metadata_is_kept_only_for_known_or_visible_sites(self):
         parent, child = "site:example.org", "site:app.example.org"
         self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
         self.clients = []
-        response = self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": [
-            {"domain": domain, "site_name": "Workspace", "site_identity": {"application_name": "Workspace"}}
-            for domain in ("example.org", "app.example.org")
-        ]})
+        metadata = [{"domain": domain, "site_name": "Workspace", "site_identity": {"application_name": "Workspace"}}
+                    for domain in ("example.org", "app.example.org", "unrelated.example")]
+        response = self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": metadata})
         self.runtime.tick(2)
-        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+        self.assertEqual(set(self.runtime.config["site_identity"]), {"example.org"})
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
         self.assertEqual(self.runtime.browser_windows, {})
         self.assertEqual(response["blocked_tab_ids"], [])
         self.assertEqual(self.runtime.latest_state["diagnostics"]["matched_sites"], 0)
         self.assertEqual(self.runtime.store.target_today(dt.date.today().isoformat()), {})
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": "invalid"})
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": [None]})
+        window = {"id": 1, "title": "Inbox", "domain": "app.example.org", "tab_id": 10}
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window], "site_metadata": metadata[1:2]})
+        self.assertEqual(self.runtime.resolve_target_id(child), parent, "a site on screen is grouped")
+        self.assertEqual(self.runtime.config["auto_links"], [child])
+
+    def test_paused_browsing_leaves_nothing_and_auto_links_are_capped(self):
+        parent, child = "site:example.org", "site:app.example.org"
+        self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
+        window = {"id": 1, "title": "Inbox", "domain": "app.example.org", "tab_id": 10,
+                  "site_identity": {"application_name": "", "manifest": ""}}
+        self.runtime.tracking = False
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window]})
+        self.assertNotIn("app.example.org", self.runtime.config["site_identity"])
+        self.assertEqual(self.runtime.resolve_target_id(child), child)
+        self.runtime.tracking = True
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window]})
+        self.assertEqual(self.runtime.resolve_target_id(child), parent)
+        self.runtime.config["service_links"]["site:manual.example"] = parent
+        with mock.patch.object(agent, "AUTO_LINKS_MAX", 3):
+            for index in range(5):
+                site = "site:s%d.example.org" % index
+                self.runtime.config["service_links"][site] = parent
+                self.runtime.remember_auto_link(site)
+        self.assertEqual(self.runtime.config["auto_links"], ["site:s2.example.org", "site:s3.example.org", "site:s4.example.org"])
+        self.assertEqual(self.runtime.resolve_target_id(child), child, "the oldest auto link is dropped")
+        self.assertEqual(self.runtime.resolve_target_id("site:manual.example"), parent, "manual links stay")
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window]})
+        self.assertEqual(self.runtime.resolve_target_id(child), parent, "and it is made again on the next visit")
+
+    def test_browser_snapshot_rejects_bad_domains_and_caps_entries(self):
+        windows = [{"id": index, "title": str(index), "domain": "s%d.example" % index, "tab_id": index}
+                   for index in range(agent.BROWSER_ENTRIES_MAX + 20)]
+        windows.append({"id": "x", "domain": "a" * 300})
+        windows.append({"id": "y", "domain": "bad domain/"})
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": windows})
+        self.assertEqual(len(self.runtime.browser_windows), agent.BROWSER_ENTRIES_MAX)
 
     def test_snapshot_identity_is_local_sanitized_and_does_not_fetch_manifest(self):
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "domain": "app.example.org",
@@ -1317,6 +1354,63 @@ class AgentTests(unittest.TestCase):
                 agent.main()
             send.assert_not_called()
 
+
+    def test_corrupted_settings_fall_back_per_key(self):
+        config = agent.load_config()
+        config.update({"schedule": {"weekdays": [0], "start": "x"}, "targets": [], "day_start_hour": 10 ** 12,
+                       "warn_before_limit": "yes", "service_links": {"site:a.example": 3, "site:b.example": "site:c.example"},
+                       "ignored_targets": ["app:ok", 7]})
+        agent.CONFIG_PATH.write_text(agent.json.dumps(config))
+        loaded = agent.load_config()
+        defaults = agent.default_config()
+        for key in ("schedule", "targets", "day_start_hour", "warn_before_limit"):
+            self.assertEqual(loaded[key], defaults[key])
+        self.assertEqual(loaded["service_links"], {"site:b.example": "site:c.example"})
+        self.assertEqual(loaded["ignored_targets"], ["app:ok"])
+
+    def test_control_socket_and_bridge_reject_bad_requests(self):
+        handler = agent.ControlHandler.__new__(agent.ControlHandler)
+        handler.server = mock.Mock(runtime=self.runtime)
+        for request in (b"[]\n", b"1\n", b"[" * 100000 + b"\n", b"not json\n"):
+            handler.rfile, handler.wfile = io.BytesIO(request), io.BytesIO()
+            handler.handle()
+            self.assertEqual(agent.json.loads(handler.wfile.getvalue()), {"ok": False, "error": "invalid request"})
+        self.assertEqual(agent.ControlHandler.timeout, 5)
+        frame = lambda payload: agent.struct.pack("<I", len(payload)) + payload
+        stdin = io.BytesIO(frame(b"x" * (1024 * 1024 + 1)) + frame(b"[]") + frame(b'{"op": "status"}'))
+        stdout = io.BytesIO()
+        with mock.patch.object(agent.sys, "stdin", mock.Mock(buffer=stdin)), \
+                mock.patch.object(agent.sys, "stdout", mock.Mock(buffer=stdout)), \
+                mock.patch.object(agent, "request_agent", return_value={"ok": True}):
+            agent.native_host()
+        replies, data = [], stdout.getvalue()
+        while data:
+            length = agent.struct.unpack("<I", data[:4])[0]
+            replies.append(agent.json.loads(data[4:4 + length]))
+            data = data[4 + length:]
+        self.assertEqual(replies, [{"ok": False, "error": "message too large"},
+                                   {"ok": False, "error": "invalid message"}, {"ok": True}])
+
+    def test_only_one_daemon_runs(self):
+        lock = os.open(agent.STATE_DIR / "daemon.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, lock)
+        agent.fcntl.flock(lock, agent.fcntl.LOCK_EX | agent.fcntl.LOCK_NB)
+        with mock.patch.object(agent, "ControlServer") as server, \
+                mock.patch.object(agent.sys, "stderr", io.StringIO()), self.assertRaises(SystemExit):
+            agent.Runtime.run(self.runtime)
+        server.assert_not_called()
+
+    def test_empty_or_relative_xdg_values_are_ignored(self):
+        with mock.patch.dict(agent.os.environ, {"XDG_STATE_HOME": "", "XDG_CONFIG_HOME": "relative/dir"}):
+            self.assertEqual(agent.state_home(), pathlib.Path.home() / ".local/state")
+            self.assertEqual(agent.config_home(), pathlib.Path.home() / ".config")
+
+    def test_visible_entries_are_capped(self):
+        self.clients = [{"app_id": "flood%d" % index, "window_title": "", "address": "0x%x" % index}
+                        for index in range(agent.VISIBLE_ENTRIES_MAX + 40)]
+        self.runtime.tick(1)
+        visible = [row for row in self.runtime.latest_state["tracked"] if row["visible_windows"]]
+        self.assertEqual(len(visible), agent.VISIBLE_ENTRIES_MAX)
 
 if __name__ == "__main__":
     unittest.main()

@@ -85,7 +85,13 @@ db.close()`]);
    if(config.site_identity?.['focus.test']?.application_name === 'Focus isolated app') break;
    if(i === 39) throw new Error('Declared application identity was not received from the real page');
  }
- const smartTab = await evaluate('chrome.tabs.create({url:"http://app.focus.test:8080",active:false})');
+ const hiddenTab = await evaluate('chrome.tabs.create({url:"http://hidden.focus.test:8080",active:false})');
+ await delay(3000);
+ assert(!JSON.parse(fs.readFileSync('/test/config/focus-ratio/config.json')).site_identity?.['hidden.focus.test'],
+   'A background tab of an unknown site leaves nothing in the settings');
+ await evaluate(`chrome.tabs.remove(${hiddenTab.id})`);
+ // A subdomain is grouped once it is on screen.
+ const smartTab = await evaluate('chrome.tabs.create({url:"http://app.focus.test:8080",active:true})');
  for(let i=0;i<40;i++) {
    await delay(250);
    const config = JSON.parse(fs.readFileSync('/test/config/focus-ratio/config.json'));
@@ -94,7 +100,7 @@ db.close()`]);
  }
  await evaluate(`chrome.tabs.update(${statusTab.id}, {active:true})`);
  await evaluate(`chrome.tabs.remove([${smartTab.id}, ${parentTab.id}])`);
- console.log('Real background-page metadata grouped a subdomain in Smart mode.');
+ console.log('Real page metadata grouped a visible subdomain in Smart mode; background tabs left nothing.');
  fs.unlinkSync('/test/visible-browser.json');
  await evaluate(`chrome.tabs.update(${statusTab.id}, {active:true})`);
  await evaluate(`chrome.tabs.remove(${backgroundTab.id})`);

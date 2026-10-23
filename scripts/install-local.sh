@@ -2,10 +2,18 @@
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-install_dir="${XDG_DATA_HOME:-$HOME/.local/share}/focus-ratio"
-unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/focus-ratio"
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/focus-ratio"
+source "$repo_dir/scripts/paths.sh"
+unit_dir="$config_home/systemd/user"
+config_dir="$config_home/focus-ratio"
+state_dir="$state_home/focus-ratio"
+# These paths are written into a systemd unit: refuse anything systemd would reinterpret.
+unsafe='[%"\$[:cntrl:]]'
+for path in "$install_dir" "$config_dir" "$state_dir"; do
+  if [[ "$path" =~ $unsafe ]]; then
+    printf 'Focus cannot use this folder in a systemd unit: %q\n' "$path" >&2
+    exit 1
+  fi
+done
 
 python3 -c 'import ctypes; ctypes.CDLL("libpsl.so.5")' || { printf 'Focus requires libpsl. Install the libpsl package first.\n' >&2; exit 1; }
 python3 -c 'import gi; gi.require_version("Gio", "2.0"); from gi.repository import Gio' 2>/dev/null \
@@ -27,6 +35,8 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart="$install_dir/focus_ratio_agent.py" --daemon
+# The helper must use the folders created above, whatever the systemd environment says.
+Environment="XDG_CONFIG_HOME=$config_home" "XDG_STATE_HOME=$state_home" "XDG_DATA_HOME=$data_home"
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

@@ -84,6 +84,7 @@ Item {
  weekly:{current:{screen_seconds:600,recorded_days:1,productive:5,neutral:2,consumption:3},previous:{screen_seconds:500,recorded_days:1},screen_delta:100},
  suggestions:[{source:"site:one.example",destination:"app:two",name:"Same name",reason:"Matching names"}]})
  property string agentPath: "unused"
+ property string stateHome: "/home/u/.local/state"
  property bool serviceConnected: true
  property string connectionLabel: "Connected"
  function appLabel(row) {return row.name;}
@@ -326,7 +327,24 @@ Item {
  compare(focusPanel.exportFolder, "")
  widget.snapshot = Object.assign({}, previous, {data_action:{path:"/x/../focus-ratio/exports/a.csv"}})
  compare(focusPanel.exportFolder, "")
+ widget.snapshot = Object.assign({}, previous, {data_action:{path:"/tmp/other/focus-ratio/exports/a.csv"}})
+ compare(focusPanel.exportFolder, "", "only the real export folder")
  widget.snapshot = previous
+ }
+ function test_bar_and_panel_stay_bounded() {
+ var many = []
+ for (var i = 0; i < 400; i++) many.push({id:"app:flood"+i, name:"Flood "+i, category:"neutral", configured:true, visible_windows:1, members:["app:flood"+i]})
+ var previous = focusBar.snapshot
+ focusBar.snapshot = Object.assign({}, previous, {updated_at:new Date().toISOString(), tracked:many})
+ compare(focusBar.chipTargets.length, 8)
+ var lines = findChild(focusBar, "focusButton").tooltipText.split("\n")
+ compare(lines.length, 6)
+ compare(lines[5], "+ 395 more")
+ focusBar.snapshot = previous
+ var panelPrevious = widget.snapshot
+ widget.snapshot = Object.assign({}, panelPrevious, {tracked:many}); wait(30)
+ compare(findChild(focusPanel, "trackedModel").count, 300)
+ widget.snapshot = panelPrevious; wait(30)
  }
  function test_closed_panel_skips_updates() {
  var previous = widget.snapshot
