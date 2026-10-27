@@ -3,6 +3,17 @@ set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_dir/scripts/paths.sh"
+
+# Show exactly which code becomes a service, so it can be compared with the verified commit.
+if commit="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+  if git -C "$repo_dir" symbolic-ref -q HEAD >/dev/null; then
+    printf 'Note: installing a branch, not a pinned commit. See README: git checkout --detach COMMIT\n' >&2
+  fi
+  if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=no)" ]]; then
+    printf 'Note: this checkout has local changes.\n' >&2
+  fi
+  printf 'Installing Focus from commit %s\n' "$commit"
+fi
 unit_dir="$config_home/systemd/user"
 config_dir="$config_home/focus-ratio"
 state_dir="$state_home/focus-ratio"
@@ -41,6 +52,12 @@ Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
 UMask=0077
+# No network: Hyprland, D-Bus, the session and the browser bridge are all local sockets.
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only

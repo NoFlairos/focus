@@ -29,9 +29,16 @@ Everything stays on your computer.
 Requires Omarchy Linux, Python 3, libpsl, python-gobject and a systemd user session. The helper is required;
 installing the widget alone does not start tracking.
 
+Install an exact commit, never the moving `main` branch: the helper runs as a user service.
+On the [Omarchy marketplace page](https://plugins.omarchy.org/plugin.html?id=io.github.noflairos.focus-ratio),
+open the *Verified snapshot* link and copy its full 40-character commit (or take the commit
+of a [release](https://github.com/NoFlairos/focus/releases)), then:
+
 ```sh
+commit=FULL_40_CHARACTER_COMMIT
 git clone https://github.com/NoFlairos/focus.git
 cd focus
+git checkout --detach "$commit"
 ./scripts/install-local.sh
 
 plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.noflairos.focus-ratio"

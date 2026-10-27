@@ -272,6 +272,8 @@ def hypr_socket() -> pathlib.Path | None:
 # second kept the CPU awake. A tick asks for the same data more than once, so
 # answers are reused for a few milliseconds.
 _hypr_cache: dict[str, tuple[float, Any]] = {}
+# Window titles come from any Wayland client: replies above this size are ignored, not buffered.
+HYPR_REPLY_MAX = 16 * 1024 * 1024
 
 
 def hypr_query(command: str) -> Any:
@@ -286,17 +288,30 @@ def hypr_query(command: str) -> Any:
                 client.settimeout(1.5)
                 client.connect(str(path))
                 client.sendall(b"j/" + command.encode())
-                chunks = []
+                chunks, size = [], 0
                 while chunk := client.recv(65536):
+                    size += len(chunk)
+                    if size > HYPR_REPLY_MAX:
+                        return None
                     chunks.append(chunk)
             parsed = json.loads(b"".join(chunks))
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, ValueError, RecursionError):
             parsed = None
     if parsed is None:
         try:
-            result = subprocess.run(["hyprctl", "-j", command], capture_output=True, text=True, timeout=1.5, check=True)
-            parsed = json.loads(result.stdout)
-        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            with subprocess.Popen(["hyprctl", "-j", command], stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL) as process:
+                deadline = threading.Timer(1.5, process.kill)
+                deadline.start()
+                try:
+                    output = process.stdout.read(HYPR_REPLY_MAX + 1)
+                finally:
+                    deadline.cancel()
+                    process.kill()
+            if len(output) > HYPR_REPLY_MAX:
+                return None
+            parsed = json.loads(output)
+        except (OSError, ValueError, RecursionError):
             return None
     _hypr_cache[command] = (time.monotonic(), parsed)
     return parsed
@@ -1825,10 +1840,13 @@ class Runtime:
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                     client.connect(str(max(sockets, key=lambda path: path.stat().st_mtime)))
-                    with client.makefile("r", encoding="utf-8", errors="replace") as stream:
-                        for line in stream:
-                            if line.startswith(("activewindowv2>>", "activewindow>>", "workspace>>")):
+                    with client.makefile("rb") as stream:
+                        while line := stream.readline(4096):
+                            if line.startswith((b"activewindowv2>>", b"activewindow>>", b"workspace>>")):
                                 wakeup.set()
+                            # Skip the rest of an overlong event (a long window title) without buffering it.
+                            while line and not line.endswith(b"\n"):
+                                line = stream.readline(4096)
             except OSError:
                 time.sleep(2)
 
@@ -1853,12 +1871,26 @@ class ControlHandler(socketserver.StreamRequestHandler):
 class ControlServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
     daemon_threads = True
+    MAX_CLIENTS = 16  # one thread per connection: extra clients are turned away, not queued
+
+    def process_request(self, request, client_address) -> None:
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
 
     def __init__(self, address: str, runtime: Runtime) -> None:
         try:
             SOCKET_PATH.unlink()
         except FileNotFoundError:
             pass
+        self.slots = threading.BoundedSemaphore(self.MAX_CLIENTS)
         super().__init__(address, ControlHandler)
         self.runtime = runtime
         os.chmod(SOCKET_PATH, 0o600)

@@ -1412,5 +1412,26 @@ class AgentTests(unittest.TestCase):
         visible = [row for row in self.runtime.latest_state["tracked"] if row["visible_windows"]]
         self.assertEqual(len(visible), agent.VISIBLE_ENTRIES_MAX)
 
+    def test_oversized_hyprland_replies_are_dropped(self):
+        client = mock.MagicMock()
+        client.__enter__.return_value = client
+        agent._hypr_cache.clear()
+        with mock.patch.object(agent, "hypr_socket", return_value=pathlib.Path("/hypr.sock")), \
+                mock.patch.object(agent.socket, "socket", return_value=client), \
+                mock.patch.object(agent, "HYPR_REPLY_MAX", 65536 * 3):
+            client.recv.side_effect = [b" " * 65536] * 4 + [b""]
+            self.assertIsNone(agent.hypr_query("clients"))
+        self.assertLessEqual(client.recv.call_count, 4)
+
+    def test_control_server_turns_away_extra_clients(self):
+        server = agent.ControlServer.__new__(agent.ControlServer)
+        server.slots = agent.threading.BoundedSemaphore(1)
+        server.slots.acquire()
+        with mock.patch.object(agent.ControlServer, "shutdown_request") as refuse, \
+                mock.patch.object(agent.socketserver.ThreadingUnixStreamServer, "process_request") as accept:
+            server.process_request("request", None)
+        refuse.assert_called_once_with("request")
+        accept.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

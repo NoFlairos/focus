@@ -3,6 +3,7 @@
 Focus runs locally on Omarchy Linux. Its optional Chromium / Google Chrome
 extension communicates only with the separately installed helper on your computer.
 No analytics, ads, remote tracking server or third-party data sharing is used.
+The helper service cannot reach the network: systemd only allows it local sockets.
 
 ## Data
 

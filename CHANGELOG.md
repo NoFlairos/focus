@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2 — 2026-10-27
+
+- **Install an exact commit:** the README checks out a full commit in detached mode
+  instead of the moving `main` branch, and the installer prints the commit it installs
+  (with a note for a branch or a modified checkout).
+- **No network, enforced:** the helper service may only use local sockets
+  (`RestrictAddressFamilies=AF_UNIX`), with a few more standard systemd restrictions.
+- **Bounded Hyprland input:** oversized replies and events (long window titles) are
+  skipped without being buffered; the control socket serves at most 16 clients at once.
+
 ## 0.9.1 — 2026-10-23 · extension 0.5.1
 
 - **Site names stay minimal:** names and identities are kept only for sites on screen
