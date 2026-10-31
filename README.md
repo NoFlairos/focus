@@ -34,19 +34,38 @@ On the [Omarchy marketplace page](https://plugins.omarchy.org/plugin.html?id=io.
 open the *Verified snapshot* link and copy its full 40-character commit (or take the commit
 of a [release](https://github.com/NoFlairos/focus/releases)), then:
 
+Every step stops the sequence if it fails, and the commit is checked before any
+downloaded script runs:
+
 ```sh
 commit=FULL_40_CHARACTER_COMMIT
-git clone https://github.com/NoFlairos/focus.git
-cd focus
-git checkout --detach "$commit"
-./scripts/install-local.sh
-
-plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.noflairos.focus-ratio"
-mkdir -p "$plugin_dir"
-install -m 0644 manifest.json BarWidget.qml Panel.qml FocusMark.qml "$plugin_dir/"
-omarchy plugin enable io.github.noflairos.focus-ratio
-omarchy restart shell
+git clone https://github.com/NoFlairos/focus.git \
+  && cd focus \
+  && git checkout --detach "$commit" \
+  && test "$(git rev-parse HEAD)" = "$commit" \
+  && ./scripts/install-local.sh "$commit" \
+  && plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.noflairos.focus-ratio" \
+  && mkdir -p "$plugin_dir" \
+  && install -m 0644 manifest.json BarWidget.qml Panel.qml FocusMark.qml "$plugin_dir/" \
+  && omarchy plugin enable io.github.noflairos.focus-ratio \
+  && omarchy restart shell
 ```
+
+To update, copy the new commit the same way and run from the `focus` folder:
+
+```sh
+commit=FULL_40_CHARACTER_COMMIT
+git fetch origin \
+  && git checkout --detach "$commit" \
+  && test "$(git rev-parse HEAD)" = "$commit" \
+  && ./scripts/install-local.sh "$commit" \
+  && install -m 0644 manifest.json BarWidget.qml Panel.qml FocusMark.qml \
+       "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.noflairos.focus-ratio/" \
+  && omarchy restart shell
+```
+
+The installer refuses anything but that exact, unmodified commit. When working on Focus
+itself, `./scripts/install-local.sh --development` installs the checkout as it is.
 
 For websites, install the [Focus extension from the Chrome Web Store](https://chromewebstore.google.com/detail/dmeieacelhalokmjoijllpieglfjojjo)
 in Chromium or Google Chrome. The helper installer registers it automatically.

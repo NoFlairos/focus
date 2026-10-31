@@ -54,3 +54,41 @@ class HostInstallTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(broken.read_text())["allowed_origins"],
                              sorted([f"chrome-extension://{EXTENSION_ID}/", f"chrome-extension://{STORE_ID}/"]))
+
+
+class PinnedInstallTests(unittest.TestCase):
+    def test_helper_installs_only_the_exact_unmodified_commit(self):
+        with tempfile.TemporaryDirectory(prefix="focus-pin-") as temporary:
+            root = Path(temporary)
+            repo, home = root / "focus", root / "home"
+            (repo / "scripts").mkdir(parents=True)
+            home.mkdir()
+            for name in ("install-local.sh", "paths.sh"):
+                (repo / "scripts" / name).write_text((SCRIPT.parent / name).read_text())
+            git = lambda *args: subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                                               check=True).stdout.strip()
+            commit = lambda message: git("-c", "user.name=t", "-c", "user.email=t@example.org",
+                                         "commit", "-q", "--allow-empty", "-am", message)
+            git("init", "-q", "-b", "main")
+            git("add", ".")
+            commit("one")
+            first = git("rev-parse", "HEAD")
+            (repo / "scripts/paths.sh").write_text((repo / "scripts/paths.sh").read_text() + "\n")
+            commit("two")
+            head = git("rev-parse", "HEAD")
+            environment = {"HOME": str(home), "PATH": os.environ["PATH"]}
+
+            def install(*args):
+                return subprocess.run(["bash", str(repo / "scripts/install-local.sh"), *args], env=environment,
+                                      capture_output=True, text=True, check=False)
+
+            self.assertEqual(install().returncode, 2)
+            self.assertEqual(install(head[:7]).returncode, 2, "a short commit is not enough")
+            result = install(first)
+            self.assertEqual(result.returncode, 1, "a checkout at another commit is refused")
+            self.assertIn("Nothing was installed", result.stderr)
+            self.assertIn("detached", install(head).stderr, "a branch is refused")
+            git("checkout", "-q", "--detach", head)
+            (repo / "scripts/paths.sh").write_text("# changed\n" + (repo / "scripts/paths.sh").read_text())
+            self.assertIn("local changes", install(head).stderr)
+            self.assertEqual(list(home.iterdir()), [], "nothing is created before the commit is confirmed")

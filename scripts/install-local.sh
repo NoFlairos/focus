@@ -4,15 +4,22 @@ set -euo pipefail
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$repo_dir/scripts/paths.sh"
 
-# Show exactly which code becomes a service, so it can be compared with the verified commit.
-if commit="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)"; then
+# The helper becomes a persistent service: install only the exact commit asked for,
+# checked out in detached mode and unmodified. --development installs a working copy as it is.
+fail() { printf '%s\n' "$1" >&2; exit "${2:-1}"; }
+[[ $# -eq 1 ]] || fail "Usage: $0 FULL_40_CHARACTER_COMMIT | --development" 2
+if [[ "$1" == --development ]]; then
+  printf 'Development install: this checkout is installed as it is.\n' >&2
+else
+  [[ "$1" =~ ^[0-9a-f]{40}$ ]] || fail "Usage: $0 FULL_40_CHARACTER_COMMIT | --development" 2
+  head="$(git -C "$repo_dir" rev-parse --verify HEAD 2>/dev/null)" || fail "Not a Git checkout: clone Focus as shown in the README."
+  [[ "$head" == "$1" ]] || fail "This checkout is at $head, not $1. Nothing was installed."
   if git -C "$repo_dir" symbolic-ref -q HEAD >/dev/null; then
-    printf 'Note: installing a branch, not a pinned commit. See README: git checkout --detach COMMIT\n' >&2
+    fail "Check out the commit in detached mode first: git checkout --detach $1"
   fi
-  if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=no)" ]]; then
-    printf 'Note: this checkout has local changes.\n' >&2
-  fi
-  printf 'Installing Focus from commit %s\n' "$commit"
+  [[ -z "$(git -C "$repo_dir" status --porcelain --untracked-files=no)" ]] \
+    || fail "This checkout has local changes. Nothing was installed."
+  printf 'Installing Focus from commit %s\n' "$head"
 fi
 unit_dir="$config_home/systemd/user"
 config_dir="$config_home/focus-ratio"

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3 — 2026-10-31
+
+- **Install and update stop on any failure:** the README chains clone, detached
+  checkout, an exact `git rev-parse HEAD` check and the installer with `&&`, for new
+  installs and updates alike.
+- **The installer refuses instead of warning:** `install-local.sh FULL_COMMIT` installs
+  only that exact, unmodified commit in detached mode, before creating anything;
+  `--development` installs a working copy as it is.
+
 ## 0.9.2 — 2026-10-27
 
 - **Install an exact commit:** the README checks out a full commit in detached mode
