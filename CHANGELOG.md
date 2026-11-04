@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4 — 2026-11-04
+
+- **Pause lifts limits only:** time keeps counting; nothing is closed or notified
+  until you resume. The panel shows "Limits paused" next to today's screen time.
+- Site names and identities are stored only for tabs whose browser window is
+  visible in Hyprland, not for windows on other workspaces.
+
 ## 0.9.3 — 2026-10-31
 
 - **Install and update stop on any failure:** the README chains clone, detached

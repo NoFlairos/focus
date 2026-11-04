@@ -90,7 +90,8 @@ Paths follow your XDG settings when configured.
 | **History** | Last 7 days; click a day for its top entries. *Worth a limit* suggestions. |
 | **Manage** | Schedule (saved automatically), apps & sites, connection and data export. |
 
-The header starts a **Focus session** or **pauses** tracking. Clicking an entry's name
+The header starts a **Focus session** or **pauses limits**: time keeps counting, nothing is
+closed or notified. Clicking an entry's name
 in Now opens it in Manage. Each entry's **More** holds its limit period and action,
 subdomain mode, linked members, Merge into and Exclude.
 
@@ -99,7 +100,7 @@ the window or active tab, and days starting at 04:00 so late nights count toward
 evening before. The limit notification stays on screen until you choose.
 
 Screen time counts simultaneous activity once. Per-app totals can therefore
-exceed screen time. Tracking stops while paused, idle, locked or outside the schedule.
+exceed screen time. Tracking stops while idle, locked or outside the schedule.
 Mapped windows can count even when covered; background tabs do not count, and
 ambiguous browser titles are skipped.
 

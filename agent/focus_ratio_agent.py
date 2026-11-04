@@ -780,7 +780,7 @@ class Runtime:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.last_tick_error, self.last_tick_error_at = "", 0.0
-        self.tracking = False  # set by each tick: in schedule, unlocked, not idle or paused
+        self.tracking = False  # set by each tick: in schedule, unlocked and not idle
         self.notifier: Notifier | None = None  # connects to the session bus on first use
         self.config = load_config()
         self.store = Store()
@@ -1094,7 +1094,7 @@ class Runtime:
         config = self.config
         known = (set(config["targets"]) | set(config["service_links"]) | set(config["service_links"].values())
                  | self.store.target_ids() | set(config["ignored_targets"]) | set(config["review_targets"]))
-        visible = {canonical_domain(str(window.get("domain", ""))) for window in self.browser_windows.values()}
+        visible = self.on_screen_domains()
         keep = lambda domain: "site:" + domain in known or domain in visible
         before = json.dumps([config["site_identity"], config["site_names"], config["dismissed_suggestions"],
                              config["independent_targets"]], sort_keys=True)
@@ -1174,8 +1174,9 @@ class Runtime:
                 metadata = message.get("site_metadata", [])
                 metadata = metadata[:BROWSER_ENTRIES_MAX] if isinstance(metadata, list) and self.tracking else []
                 # Names and identities are kept only while tracking, and only for sites on screen or
-                # already in Focus: background tabs and paused browsing leave nothing on disk.
-                visible_domains = {browser_domain(window.get("domain")) for window in self.browser_windows.values()}
+                # already in Focus: background tabs, windows on other workspaces and browsing outside
+                # the schedule leave nothing on disk.
+                visible_domains = self.on_screen_domains() if self.tracking else set()
                 remembered = visible_domains | self.known_site_domains() if metadata or self.tracking else set()
                 names_changed = False
                 for window in (metadata + list(self.browser_windows.values())) if self.tracking else []:
@@ -1515,6 +1516,10 @@ class Runtime:
                 blocked.append(canonical_domain(site_id[5:]))
         return blocked
 
+    def on_screen_domains(self) -> set[str]:
+        """Domains of active tabs whose browser window is visible in Hyprland right now."""
+        return {site["target_id"][5:] for site in self.visible_sites(visible_clients(), list(self.browser_windows.values()))}
+
     def visible_sites(self, clients: list[dict[str, Any]], browser_windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # The extension reports active tabs from non-minimized browser windows.
         # Match their title with a visible Hyprland client to exclude other workspaces.
@@ -1580,13 +1585,13 @@ class Runtime:
         with self.lock:
             self.resume_if_due(now)
             schedule = self.config["schedule"]
-            paused = self.paused
             browser_active = time.monotonic() - self.last_browser_snapshot <= 3
             browser_windows = list(self.browser_windows.values()) if browser_active else []
         locked, idle = session_status()
         browser_running = browser_is_running()
         focus_active = bool(self.focus_until(now))
-        in_schedule = (in_work_hours(now, schedule) or focus_active) and not locked and not idle and not paused
+        # Pause only lifts limits: activity keeps counting during the schedule.
+        in_schedule = (in_work_hours(now, schedule) or focus_active) and not locked and not idle
         app_clients = visible_clients() if in_schedule else []
         focused_address = focused_window_address() if in_schedule else ""
         visible = list(app_clients)
@@ -1601,7 +1606,6 @@ class Runtime:
                 self.browser_opened_at = time.monotonic()
             browser_connection_expected = (browser_running and self.browser_opened_at is not None
                                            and time.monotonic() - self.browser_opened_at >= 8)
-            in_schedule = in_schedule and not self.paused
             self.tracking = in_schedule
             if not in_schedule:
                 visible = []
@@ -1658,7 +1662,7 @@ class Runtime:
                 status = row.pop("_status")
                 action = row["limit_action"]
                 name = row["name"]
-                if status and action != "keep_open":
+                if status and action != "keep_open" and not self.paused:
                     key = (target_id, notice_key(status))
                     remaining = status["remaining"]
                     if (self.config["warn_before_limit"] and status["reason"] != "focus"

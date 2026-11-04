@@ -40,7 +40,7 @@ BarWidget {
   readonly property string connectionIssue: ["service_offline", "reload_extension", "browser_offline"]
     .indexOf(connectionStatus) >= 0 ? connectionLabel : ""
   readonly property double focusUntil: Number(snapshot.focus_until || 0) * 1000
-  readonly property bool trackingPaused: snapshot.paused === true || snapshot.working === false
+  readonly property bool trackingPaused: snapshot.working === false
   readonly property bool hasChips: visibleTargets.length > 0
   readonly property var visibleTargets: (snapshot.tracked || []).filter(function(target) {
     return Number(target.visible_windows || 0) > 0
@@ -148,8 +148,8 @@ BarWidget {
         : root.connectionIssue === "Reload extension" ? "\nTab closing unavailable. Reload Focus in chrome://extensions."
         : "\nTracking and limits unavailable.")
       : root.focusUntil > root.statusNow ? "Focus session · until " + Qt.formatTime(new Date(root.focusUntil), "HH:mm")
-      : root.trackingPaused ? "Focus · tracking paused"
-      + (root.snapshot.idle && !root.snapshot.paused ? " while idle" : "")
+      : root.trackingPaused ? "Focus · tracking paused" + (root.snapshot.idle ? " while idle" : "")
+      : root.snapshot.paused === true ? "Focus · limits paused"
       : root.visibleTargets.length ? root.visibleTargets.slice(0, 5).map(function(target) {
       return root.appLabel(target) + (target.category === "consumption"
         ? " · " + root.remainingLabel(target.remaining_seconds) + " left" : "")

@@ -813,6 +813,10 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [], "site_metadata": [None]})
         window = {"id": 1, "title": "Inbox", "domain": "app.example.org", "tab_id": 10}
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [window], "site_metadata": metadata[1:2]})
+        self.assertEqual(self.runtime.resolve_target_id(child), child, "a window on another workspace is not on screen")
+        self.assertNotIn("app.example.org", self.runtime.config["site_identity"])
+        self.clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": "0x1"}]
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [window], "site_metadata": metadata[1:2]})
         self.assertEqual(self.runtime.resolve_target_id(child), parent, "a site on screen is grouped")
         self.assertEqual(self.runtime.config["auto_links"], [child])
 
@@ -821,6 +825,7 @@ class AgentTests(unittest.TestCase):
         self.runtime.handle_message({"op": "classify", "target_id": parent, "category": "productive"})
         window = {"id": 1, "title": "Inbox", "domain": "app.example.org", "tab_id": 10,
                   "site_identity": {"application_name": "", "manifest": ""}}
+        self.clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": "0x1"}]
         self.runtime.tracking = False
         self.runtime.handle_message({"op": "browser_snapshot", "windows": [window]})
         self.assertNotIn("app.example.org", self.runtime.config["site_identity"])
@@ -849,11 +854,12 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(self.runtime.browser_windows), agent.BROWSER_ENTRIES_MAX)
 
     def test_snapshot_identity_is_local_sanitized_and_does_not_fetch_manifest(self):
-        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "domain": "app.example.org",
+        self.clients = [{"app_id": "chromium", "window_title": "Inbox - Chromium", "address": "0x1"}]
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "title": "Inbox", "domain": "app.example.org",
             "site_identity": {"application_name": "  Workspace   App ", "manifest": "https://example.org/app.json?token=private#state"}}]})
         self.assertEqual(self.runtime.config["site_identity"]["app.example.org"], {
             "application_name": "Workspace App", "manifest": "https://example.org/app.json"})
-        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "domain": "app.example.org",
+        self.runtime.handle_message({"op": "browser_snapshot", "windows": [{"id": 1, "title": "Inbox", "domain": "app.example.org",
             "site_identity": {"application_name": "Workspace", "manifest": "https://other.example.org/manifest.json"}}]})
         self.assertEqual(self.runtime.config["site_identity"]["app.example.org"]["manifest"], "")
 
@@ -1147,9 +1153,15 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.runtime.latest_state["tracked"][0]["remaining_seconds"], 0)
         self.assertEqual(len(self.closed), 1)
         self.runtime.handle_message({"op": "pause", "paused": True})
+        self.runtime.notified_limits.clear()
+        self.sent.reset_mock()
+        before = self.runtime.latest_state["tracked"][0]["today_seconds"]
         self.runtime.tick(1)
-        self.assertFalse(self.runtime.latest_state["working"])
-        self.assertEqual(len(self.closed), 1)
+        self.assertTrue(self.runtime.latest_state["working"], "pause keeps tracking")
+        self.assertEqual(self.runtime.latest_state["tracked"][0]["today_seconds"], before + 1)
+        self.assertEqual(len(self.closed), 1, "pause closes nothing")
+        self.sent.assert_not_called()
+        self.assertEqual(self.runtime.blocked_domains(), [])
 
     def test_screen_time_counts_overlapping_apps_once_and_survives_restart(self):
         self.clients.append({"app_id": "Second", "window_title": "Second", "address": "0x456"})
@@ -1171,13 +1183,13 @@ class AgentTests(unittest.TestCase):
         with mock.patch.object(agent, "in_work_hours", return_value=False):
             self.runtime.tick(10)
         self.runtime.paused = True
-        self.runtime.tick(10)
+        self.runtime.tick(10)  # pause lifts limits only: this counts
         self.runtime.paused = False
         self.runtime.config["ignored_targets"] = ["app:test"]
         self.runtime.tick(10)
         self.clients = []
         self.runtime.tick(10)
-        self.assertEqual(self.runtime.latest_state["today"]["screen_seconds"], 3)
+        self.assertEqual(self.runtime.latest_state["today"]["screen_seconds"], 13)
 
     def test_screen_time_keeps_legacy_history_unknown_and_new_days_separate(self):
         yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()

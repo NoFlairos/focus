@@ -13,7 +13,7 @@ site names from open tabs (`application-name` or `og:site_name`) and manifest UR
 strings or fragments. Manifests are not fetched.
 These declarations help identify related services. The helper keeps them only for
 sites shown on screen while tracking is active, or already in Focus; declarations from
-background tabs and from browsing while paused or outside the schedule are discarded.
+background tabs and from browsing outside the schedule are discarded.
 Background tabs do not accumulate time. The extension does not read page bodies, form inputs,
 passwords or cookies. Titles may contain personal information and are used only
 in memory to match tabs to windows.
@@ -28,9 +28,9 @@ and remain until you delete them, even after clearing history.
 
 ## Control
 
-Pause stops counting, enforcement and storing site names. The browser bridge still
-sends local metadata, which the helper discards. Disable the extension to stop those
-messages. Uninstalling preserves
+Pause lifts limits only: activity keeps counting during the schedule. Outside the
+schedule, while idle or locked, the browser bridge still sends local metadata, which the
+helper discards. Disable the extension to stop those messages. Uninstalling preserves
 settings and history. To erase them, stop the helper and delete
 `~/.config/focus-ratio` and `~/.local/state/focus-ratio` (or their XDG equivalents).
 Exports in the state directory are deleted with it. The live status shown in the

@@ -938,6 +938,7 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 height: Style.space(28)
                 text: root.paused ? "Resume" : "Pause"
+                tooltipText: root.paused ? "" : "Lift limits for a while; time keeps counting"
                 selected: root.headerPicker === "pause"
                 foreground: root.textColor
                 fontSize: Style.font.caption
@@ -981,8 +982,8 @@ Panel {
                 ? root.formatElapsed(root.today.screen_seconds) : "—")
                 + (root.focusActive && root.snapshot.focus_until
                   ? "  ·  Focus session until " + Qt.formatDateTime(new Date(root.snapshot.focus_until * 1000), "HH:mm")
-                  : root.paused && root.snapshot.pause_until
-                  ? "  ·  Resumes " + Qt.formatDateTime(new Date(root.snapshot.pause_until * 1000), "ddd HH:mm") : "")
+                  : root.paused ? "  ·  Limits paused" + (root.snapshot.pause_until
+                    ? " until " + Qt.formatDateTime(new Date(root.snapshot.pause_until * 1000), "ddd HH:mm") : "") : "")
               color: root.mutedText
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
@@ -1820,7 +1821,6 @@ Panel {
                   text: root.page === "review" ? "Everything is classified"
                     : root.page === "manage" ? "No saved apps or sites"
                     : root.working ? "No open apps or sites"
-                    : root.paused ? "Tracking paused"
                     : root.snapshot.idle ? "Paused while idle"
                     : "Outside tracking hours"
                   color: root.textColor
@@ -1832,7 +1832,6 @@ Panel {
                   text: root.page === "review" ? "Apps and sites used 10 minutes this week appear here."
                     : root.page === "manage" ? "Choose a role in Now or Review to save an app."
                     : root.working ? "Apps on displayed workspaces appear here while they are open."
-                    : root.paused ? "Limits are paused too."
                     : "Activity counts during your tracking schedule."
                   textFormat: Text.PlainText
                   color: root.mutedText
@@ -1918,7 +1917,6 @@ Panel {
                 text: !root.serviceConnected ? "Start the Focus user service or run the local installer."
                   : !root.diagnostics.browser_connected ? "Keep website distractions in check."
                   : root.diagnostics.browser_can_close_tabs === false ? "Reload Focus in chrome://extensions to enable tab closing."
-                  : root.paused ? "Tracking and limits are paused."
                   : !root.working ? "Tracking is inactive: check your schedule or session idle state."
                   : Number(root.diagnostics.matched_sites || 0) + " visible site(s) recognized."
                 color: root.mutedText
