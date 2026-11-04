@@ -1,10 +1,10 @@
 # Omarchy submission draft
 
-**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.8.0
+**Focus** · Productivity · `io.github.noflairos.focus-ratio` · 0.9.5
 
 Repository: https://github.com/NoFlairos/focus
 Tags: bar, hyprland, quickshell
-Commit: resolve the current main HEAD at submission.
+Commit: the full commit of the release, in the *Target commit* field of the Verify issue.
 
 Stay focused and keep distractions in check. Understand your screen time, set
 hourly or daily limits for apps and websites, start focus sessions and review your

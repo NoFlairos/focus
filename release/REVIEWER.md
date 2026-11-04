@@ -11,7 +11,7 @@ and Chromium or Google Chrome. No product account is needed.
    Open a test site in a visible window for 10 minutes, then classify it in Review.
    Background tabs should not accumulate time.
 4. On a disposable tab, set Consumption to one minute/hour. Test Close, Notify,
-   Keep open, *5 more minutes*, a focus session and Pause. Use no unsaved work
+   Keep open, *5 more minutes*, a focus session and Lift limits. Use no unsaved work
    for the Close test.
 5. Check groups/detachment, history and export. Stop the helper: the popup should
    report Not connected. Restart it and check recovery.

@@ -937,8 +937,7 @@ Panel {
                 id: pauseButton
                 anchors.verticalCenter: parent.verticalCenter
                 height: Style.space(28)
-                text: root.paused ? "Resume" : "Pause"
-                tooltipText: root.paused ? "" : "Lift limits for a while; time keeps counting"
+                text: root.paused ? "Restore limits" : "Lift limits"
                 selected: root.headerPicker === "pause"
                 foreground: root.textColor
                 fontSize: Style.font.caption
@@ -958,7 +957,7 @@ Panel {
                 model: root.headerPicker === "focus"
                   ? [{label:"25 min",value:"25"}, {label:"50 min",value:"50"}, {label:"90 min",value:"90"}]
                   : [{label:"15 min",value:"15"}, {label:"1 hour",value:"60"},
-                     {label:"Tomorrow",value:"tomorrow"}, {label:"Until resumed",value:"on"}]
+                     {label:"Tomorrow",value:"tomorrow"}, {label:"Until restored",value:"on"}]
                 delegate: Omarchy.Button {
                   required property var modelData
                   objectName: root.headerPicker + "Choice"
@@ -982,7 +981,7 @@ Panel {
                 ? root.formatElapsed(root.today.screen_seconds) : "—")
                 + (root.focusActive && root.snapshot.focus_until
                   ? "  ·  Focus session until " + Qt.formatDateTime(new Date(root.snapshot.focus_until * 1000), "HH:mm")
-                  : root.paused ? "  ·  Limits paused" + (root.snapshot.pause_until
+                  : root.paused ? "  ·  Limits lifted" + (root.snapshot.pause_until
                     ? " until " + Qt.formatDateTime(new Date(root.snapshot.pause_until * 1000), "ddd HH:mm") : "") : "")
               color: root.mutedText
               font.pixelSize: Style.font.caption

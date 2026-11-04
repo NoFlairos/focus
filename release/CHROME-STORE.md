@@ -17,7 +17,7 @@ check. Separate productive work from consumption and set limits that fit your ro
 • Start a focus session that blocks distracting sites for 25, 50 or 90 minutes.
 • Take 5 more minutes once when a limit is reached, instead of giving up.
 • Share one limit across an app and its website.
-• Choose tracking hours, pause when needed, and review your week.
+• Choose tracking hours, lift limits when needed, and review your week.
 
 This extension adds website tracking to Focus for Omarchy Linux. It requires the
 Focus desktop plugin and local helper, and supports Chromium and Google Chrome.

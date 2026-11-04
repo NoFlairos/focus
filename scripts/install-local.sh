@@ -84,5 +84,4 @@ systemctl --user reenable focus-ratio.service
 systemctl --user restart focus-ratio.service
 
 printf 'Focus service installed and started.\n'
-printf 'Load this extension folder in Chromium: %s\n' "$install_dir/browser"
-printf 'Copy its extension ID, then run: %s/scripts/install-browser-host.sh EXTENSION_ID\n' "$repo_dir"
+printf 'For websites, install the Focus extension from the Chrome Web Store.\n'

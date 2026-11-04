@@ -19,7 +19,7 @@ passwords or cookies. Titles may contain personal information and are used only
 in memory to match tabs to windows.
 
 The helper stores app/site activity, screen time and settings: classifications,
-quotas, schedules, pauses, warnings, groups, exclusions and discovered site names.
+quotas, schedules, lifted limits, warnings, groups, exclusions and discovered site names.
 Declared application identity and subdomain rules are also stored locally. Subdomain
 groups Focus creates itself are limited to the 500 most recent; manual merges stay.
 Daily history is kept for up to 45 days; hourly usage for about three days.
@@ -28,7 +28,7 @@ and remain until you delete them, even after clearing history.
 
 ## Control
 
-Pause lifts limits only: activity keeps counting during the schedule. Outside the
+Lifting limits does not stop tracking: activity keeps counting during the schedule. Outside the
 schedule, while idle or locked, the browser bridge still sends local metadata, which the
 helper discards. Disable the extension to stop those messages. Uninstalling preserves
 settings and history. To erase them, stop the helper and delete

@@ -1162,6 +1162,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(len(self.closed), 1, "pause closes nothing")
         self.sent.assert_not_called()
         self.assertEqual(self.runtime.blocked_domains(), [])
+        self.assertFalse(self.runtime.latest_state["tracked"][0]["can_snooze"], "no extra time to offer")
 
     def test_screen_time_counts_overlapping_apps_once_and_survives_restart(self):
         self.clients.append({"app_id": "Second", "window_title": "Second", "address": "0x456"})

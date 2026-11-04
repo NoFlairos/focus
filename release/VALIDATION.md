@@ -1,9 +1,9 @@
-# Validation — 2026-10-13 (0.8.0)
+# Validation — 2026-11-04 (0.9.5)
 
-**Passed:** 87 Python tests, browser enforcement tests, 11 Qt panel tests,
+**Passed:** 103 Python tests, browser enforcement tests, 16 Qt panel tests,
 Omarchy manifest validation and systemd unit-file validation.
 
-An isolated Chromium 152 profile loaded the real extension and connected to the
+An isolated Chromium 155 profile loaded the real extension and connected to the
 installed native host and helper. An active tab closed at its limit while a
 background tab stayed open; Smart grouping joined two pages declaring the same
 application; connection loss, installation and removal passed.

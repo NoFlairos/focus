@@ -90,7 +90,7 @@ Paths follow your XDG settings when configured.
 | **History** | Last 7 days; click a day for its top entries. *Worth a limit* suggestions. |
 | **Manage** | Schedule (saved automatically), apps & sites, connection and data export. |
 
-The header starts a **Focus session** or **pauses limits**: time keeps counting, nothing is
+The header starts a **Focus session** or **lifts limits**: time keeps counting, nothing is
 closed or notified. Clicking an entry's name
 in Now opens it in Manage. Each entry's **More** holds its limit period and action,
 subdomain mode, linked members, Merge into and Exclude.

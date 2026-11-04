@@ -130,7 +130,7 @@ Item {
  focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, paused:true, tracked:[]}
  verify(!logo.active)
  compare(logo.opacity, 0.55)
- compare(findChild(focusBar, "focusButton").tooltipText, "Focus · limits paused")
+ compare(findChild(focusBar, "focusButton").tooltipText, "Focus · limits lifted")
  focusBar.snapshot = {updated_at:new Date(now).toISOString(), working:true, focus_until:now/1000 + 600, tracked:[]}
  verify(logo.session && logo.active)
  focusBar.snapshot = {working:true, tracked:[{id:"app:x",name:"X",visible_windows:1,category:"neutral"}]}

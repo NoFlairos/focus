@@ -873,7 +873,7 @@ class Runtime:
             remaining, reason = 0, "focus"
         return {"quota": quota, "used": int(used), "remaining": remaining, "period": period,
                 "period_key": key, "reason": reason, "snoozed": snoozed,
-                "can_snooze": reason != "focus" and not snoozed}
+                "can_snooze": reason != "focus" and not snoozed and not self.paused}
 
     def notify(self, title: str, body: str, snooze_target: str = "") -> None:
         """Desktop notification; a limit notification offers one 5-minute extension."""

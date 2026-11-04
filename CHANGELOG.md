@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.5 — 2026-11-04
+
+- **Pause is now Lift limits / Restore limits:** the name says what it does, since time
+  keeps counting. *5 more minutes* is no longer offered while limits are lifted.
+- The installer points to the Chrome Web Store instead of developer steps.
+- Screenshots and release documents refreshed.
+
 ## 0.9.4 — 2026-11-04
 
 - **Pause lifts limits only:** time keeps counting; nothing is closed or notified

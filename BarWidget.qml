@@ -149,7 +149,7 @@ BarWidget {
         : "\nTracking and limits unavailable.")
       : root.focusUntil > root.statusNow ? "Focus session · until " + Qt.formatTime(new Date(root.focusUntil), "HH:mm")
       : root.trackingPaused ? "Focus · tracking paused" + (root.snapshot.idle ? " while idle" : "")
-      : root.snapshot.paused === true ? "Focus · limits paused"
+      : root.snapshot.paused === true ? "Focus · limits lifted"
       : root.visibleTargets.length ? root.visibleTargets.slice(0, 5).map(function(target) {
       return root.appLabel(target) + (target.category === "consumption"
         ? " · " + root.remainingLabel(target.remaining_seconds) + " left" : "")
